@@ -160,6 +160,8 @@ class MicClient(ReconnectingWS):
                 await self._ws.send(data)
             except Exception as e:
                 logger.warning("MicClient send failed: %s", e)
+        else:
+            logger.warning("MicClient: ws is None or state=%s, skipping send", self._ws.state.name if self._ws else "None")
 
 
 class SpeakerClient(ReconnectingWS):
