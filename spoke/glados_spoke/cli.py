@@ -17,7 +17,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--port", type=int, default=None, help="Hub WebSocket port (default: 5051)")
     parser.add_argument("--config", type=str, default=None, help="Path to spoke_config.yaml")
     parser.add_argument("--aec", action="store_true", help="Enable acoustic echo cancellation")
-    parser.add_argument("--mic-device", type=int, default=None, help="Mic device index")
+    parser.add_argument("--mic-device", type=str, default=None, help="Mic device index")
     parser.add_argument("--speaker-device", type=int, default=None, help="Speaker device index")
     parser.add_argument("--log-level", type=str, default="INFO", help="Logging level")
     return parser.parse_args()

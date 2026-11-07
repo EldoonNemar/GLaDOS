@@ -284,7 +284,7 @@ def main() -> None:
 
     ap.add_argument("--log-level", default="INFO")
 
-    ap.add_argument("--mic-device", type=int, default=None)
+    ap.add_argument("--mic-device", type=str, default=None)
 
     ap.add_argument("--speaker-device", type=int, default=None)
 
