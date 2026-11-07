@@ -1,4 +1,4 @@
-"""WebSocket client with automatic reconnection."""
+"""WebSocket client with automatic reconnection — based on upstream reference client."""
 
 from __future__ import annotations
 
@@ -138,42 +138,74 @@ class ReconnectingWS:
 
 
 class MicClient(ReconnectingWS):
-    """Microphone client: pushes PCM audio chunks to the hub."""
+    """Microphone client: streams float32 16 kHz audio to /microphone.
 
-    def __init__(self, url: str, on_capture=None, **kwargs: Any) -> None:
+    Uses an asyncio.Queue to bridge the PortAudio callback safely into the
+    asyncio event loop — matching the upstream reference client pattern.
+    """
+
+    def __init__(
+        self,
+        url: str,
+        *,
+        on_capture: Callable[[np.ndarray], None] | None = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(url, **kwargs)
         self._on_capture = on_capture
+        self._out: asyncio.Queue[bytes] = asyncio.Queue(maxsize=8)
 
     async def _handle_text(self, text: str) -> None:
         logger.debug("MicClient received: %s", text[:80])
 
     def push_sample(self, samples: np.ndarray) -> None:
-        if self._ws is not None and self._ws.state.name == "OPEN":
-            data = np.ascontiguousarray(samples, dtype=np.float32).tobytes()
-            logger.info("Sending mic audio: %d samples = %d bytes", len(samples), len(data))
-            loop = asyncio.get_running_loop()
-            asyncio.run_coroutine_threadsafe(self._safe_send(data), loop)
+        """Called from the PortAudio callback thread."""
+        data = np.ascontiguousarray(samples, dtype=np.float32).tobytes()
+        if self._out.full():
+            self._out.get_nowait()
+            self._out.task_done()
+        self._out.put_nowait(data)
 
-    async def _safe_send(self, data: bytes) -> None:
-        logger.debug("MicClient._safe_send called, ws state=%s", self._ws.state.name if self._ws else "None")
-        if self._ws is not None and self._ws.state.name == "OPEN":
+    async def start(self) -> None:
+        await super().start()
+        self._sender_task = asyncio.create_task(self._sender())
+
+    async def stop(self) -> None:
+        if hasattr(self, "_sender_task"):
+            self._sender_task.cancel()
             try:
-                await self._ws.send(data)
-            except Exception as e:
-                logger.warning("MicClient send failed: %s", e)
-        else:
-            logger.warning("MicClient: ws is None or state=%s, skipping send", self._ws.state.name if self._ws else "None")
+                await self._sender_task
+            except asyncio.CancelledError:
+                pass
+        await super().stop()
+
+    async def _sender(self) -> None:
+        """Send queued microphone blocks in capture order."""
+        while True:
+            try:
+                data = await self._out.get()
+                try:
+                    if self._ws and self._ws.state.name == "OPEN":
+                        await self._ws.send(data)
+                finally:
+                    self._out.task_done()
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                logger.exception("MicClient sender error")
 
 
 class SpeakerClient(ReconnectingWS):
-    """Speaker client: receives TTS audio from the hub."""
+    """Speaker client: receives TTS audio from /speaker and plays it."""
 
     def __init__(
-        self, url: str, on_audio_chunk=None, on_text=None, **kwargs: Any
+        self,
+        url: str,
+        on_audio_chunk: Callable[[bytes, float, int], Awaitable[None]] | None = None,
+        **kwargs: Any,
     ) -> None:
         super().__init__(url, **kwargs)
         self.on_audio_chunk = on_audio_chunk
-        self._on_text = on_text
         self._current_sample_rate: int = 22050
         self._current_play_time: float = 0.0
 
@@ -195,5 +227,3 @@ class SpeakerClient(ReconnectingWS):
             self._current_sample_rate = int(text.split(":", 1)[1])
         elif text == "reset":
             pass
-        elif self._on_text:
-            await self._on_text(text)
