@@ -138,7 +138,7 @@ class ReconnectingWS:
 
     def connected(self) -> bool:
 
-        return self._ws is not None and self._ws.open
+        return self._ws is not None and self._ws.state.name == "OPEN"
 
 
 
@@ -200,7 +200,7 @@ class ReconnectingWS:
 
             try:
 
-                while self._running and ws.open:
+                while self._running and ws.state.name == "OPEN":
 
                     try:
 
@@ -279,12 +279,12 @@ class MicClient(ReconnectingWS):
         logger.debug("MicClient received: %s", text[:80])
 
     def push_sample(self, samples: np.ndarray) -> None:
-        if self._ws is not None and self._ws.open:
+        if self._ws is not None and self._ws.state.name == "OPEN":
             data = np.ascontiguousarray(samples, dtype=np.float32).tobytes()
             asyncio.create_task(self._safe_send(data))
 
     async def _safe_send(self, data: bytes) -> None:
-        if self._ws is not None and self._ws.open:
+        if self._ws is not None and self._ws.state.name == "OPEN":
             try:
                 await self._ws.send(data)
             except Exception:
