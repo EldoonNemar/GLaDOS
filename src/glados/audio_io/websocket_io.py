@@ -636,6 +636,7 @@ class WebsocketAudioIO(AudioIO):
         """
         # unique ID for the client
         client_id = uuid.uuid4()
+        logger.info("Mic client connected: %s from %s", client_id, websocket.remote_address),
         # VAD is per microphone because it stores context
         vad_model = VAD()
         # needed amount of samples for VAD
