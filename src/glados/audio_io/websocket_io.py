@@ -644,8 +644,24 @@ class WebsocketAudioIO(AudioIO):
         # unique ID for the client
         client_id = uuid.uuid4()
         logger.info("Mic client connected: {} from {}", client_id, websocket.remote_address)
-        # VAD is per microphone because it stores context
-        vad_model = VAD()
+
+        # send sample rate immediately (before VAD loads)
+        try:
+            await websocket.send("sampleRate:" + str(self.SAMPLE_RATE))
+        except websockets.exceptions.ConnectionClosed:
+            return
+
+        # The default mode is deliberately single-source: the first connected
+        # microphone owns input until it disconnects or listening stops.
+        if not self._rooms:
+            async with self._mic_state_lock:
+                if self._mic_state.current_id is None:
+                    self._mic_state.current_id = client_id
+
+        # VAD is per microphone because it stores context — load in background thread
+        # so the event loop can process WebSocket frames while we initialize
+        loop = asyncio.get_event_loop()
+        vad_model = await loop.run_in_executor(None, VAD)
         # needed amount of samples for VAD
         vad_needed_samples = self.SAMPLE_RATE * self.VAD_SIZE // 1000
         # currently stored samples
@@ -658,19 +674,6 @@ class WebsocketAudioIO(AudioIO):
             async with self._mic_state_lock:
                 if self._mic_state.current_id == client_id:
                     self._clear_microphone_ownership()
-
-        # send sample rate
-        try:
-            await websocket.send("sampleRate:" + str(self.SAMPLE_RATE))
-        except websockets.exceptions.ConnectionClosed:
-            return
-
-        # The default mode is deliberately single-source: the first connected
-        # microphone owns input until it disconnects or listening stops.
-        if not self._rooms:
-            async with self._mic_state_lock:
-                if self._mic_state.current_id is None:
-                    self._mic_state.current_id = client_id
 
         while True:
             # wait for audio
