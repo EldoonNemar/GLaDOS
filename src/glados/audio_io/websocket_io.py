@@ -153,8 +153,8 @@ class WebsocketAudioIO(AudioIO):
         # if the playback was interrupted by another task, this is set
         self._playback_was_interrupted: bool = False
 
-        # if microphone is listening
-        self._is_listening = False
+        # if microphone is listening — WebSocket backend is always ready to accept audio
+        self._is_listening = True
         # microphone state: lock initialized in self._run_server
         self._mic_state_lock: asyncio.Lock
         self._mic_state = MicState(room=self._default_room_tag)
