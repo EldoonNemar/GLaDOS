@@ -662,6 +662,7 @@ class WebsocketAudioIO(AudioIO):
         # so the event loop can process WebSocket frames while we initialize
         loop = asyncio.get_event_loop()
         vad_model = await loop.run_in_executor(None, VAD)
+        logger.debug("VAD loaded, entering recv loop")
         # needed amount of samples for VAD
         vad_needed_samples = self.SAMPLE_RATE * self.VAD_SIZE // 1000
         # currently stored samples
@@ -676,6 +677,7 @@ class WebsocketAudioIO(AudioIO):
                     self._clear_microphone_ownership()
 
         while True:
+            logger.debug("Mic handler: entering recv loop for {}", client_id)
             # wait for audio
             try:
                 msg = await websocket.recv()

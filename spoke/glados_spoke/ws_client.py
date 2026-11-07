@@ -158,8 +158,8 @@ class MicClient(ReconnectingWS):
         if self._ws is not None and self._ws.state.name == "OPEN":
             try:
                 await self._ws.send(data)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("MicClient send failed: %s", e)
 
 
 class SpeakerClient(ReconnectingWS):
