@@ -55,9 +55,13 @@ def main() -> None:
     # Run the client
     client = SpokeClient(config)
     try:
-        asyncio.run(client.run())
+        async def _run():
+            await client.start()
+            await client._wait_for_shutdown()
+        asyncio.run(_run())
     except KeyboardInterrupt:
         logger.info("Shutting down...")
+    finally:
         asyncio.run(client.stop())
 
 
