@@ -204,7 +204,7 @@ class SpokeClient:
 
                 asyncio.run_coroutine_threadsafe(
 
-                    self._mic_client.push_sample(np.ascontiguousarray(samples, dtype=np.float32).tobytes()),
+                    self._mic_client.push_sample(np.ascontiguousarray(samples, dtype=np.float32)),
 
                     loop,
 
