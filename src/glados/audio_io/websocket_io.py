@@ -480,7 +480,6 @@ class WebsocketAudioIO(AudioIO):
                     self._server_listen,
                     host=server,
                     port=port,
-                    process_request=self._process_request,
                 )
                 self._server_instance = server_instance
                 if not result_future.done():
@@ -496,33 +495,6 @@ class WebsocketAudioIO(AudioIO):
             self._server_instance = None
             self._server_loop = None
 
-    async def _process_request(
-        self, connection: websockets.ServerConnection, request: websockets.http11.Request
-    ) -> None:
-        """
-        Route incoming WebSocket connections based on request path.
-
-        This replaces the old process_request pattern that returned HTTP responses.
-        In websockets 17.x, we use this hook to route to the appropriate handler
-        after the handshake completes.
-
-        Args:
-            connection: The WebSocket connection
-            request: The HTTP request object containing path, headers, etc.
-        """
-        path = request.path
-
-        if path == "/speaker":
-            logger.info("Speaker client connecting from %s", connection.remote_address)
-            asyncio.create_task(self._server_speaker(connection))
-        elif path == "/microphone":
-            logger.info("Mic client connecting from %s", connection.remote_address)
-            asyncio.create_task(self._server_microphone(connection))
-        else:
-            logger.error("Unknown websocket path: '%s' from %s", path, connection.remote_address)
-            # Close the connection with an error
-            await connection.close(1008, f"Unknown path: {path}")
-
     async def _server_listen(self, websocket: websockets.ServerConnection) -> None:
         """
         Handle incoming websocket connections.
@@ -530,11 +502,18 @@ class WebsocketAudioIO(AudioIO):
         Args:
             websocket: Websocket connection
         """
-        # In websockets 17.x, the path is accessed via websocket.request.path
-        # But request is None after handshake, so we use _process_request hook instead
-        # This method should not be called directly - routing is done via _process_request
-        logger.warning("_server_listen called directly without path routing; this should not happen")
-        await websocket.close(1011, "Internal error")
+        # Route based on the request path
+        path = websocket.request.path if websocket.request else "/"
+
+        if path == "/speaker":
+            logger.info("Speaker client connecting from %s", websocket.remote_address)
+            await self._server_speaker(websocket)
+        elif path == "/microphone":
+            logger.info("Mic client connecting from %s", websocket.remote_address)
+            await self._server_microphone(websocket)
+        else:
+            logger.error("Unknown websocket path: '%s' from %s", path, websocket.remote_address)
+            await websocket.close(1008, f"Unknown path: {path}")
 
     async def _server_speaker(self, websocket: websockets.ServerConnection) -> None:
         """
