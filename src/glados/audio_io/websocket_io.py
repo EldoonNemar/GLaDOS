@@ -59,7 +59,7 @@ class WebsocketAudioIO(AudioIO):
     SAMPLE_RATE: int = 16000  # Sample rate for input stream
     VAD_SIZE: int = 32  # Milliseconds of sample for Voice Activity Detection (VAD)
     VAD_THRESHOLD: float = 0.5  # Threshold for VAD detection
-    SERVER: str = "127.0.0.1"  # websockets server listen address
+    SERVER: str = "0.0.0.0"  # websockets server listen address
     PORT: int = 5051  # websockets server port
     SPEAKER_SYNC_DELAY_MS: int = 250  # Milliseconds to add to start time to account for speaker synchronisation
     MIC_MAX_SILENCE_CHUNKS: int = 10  # how many VAD chunks must be silent for a mic to relinquish control
