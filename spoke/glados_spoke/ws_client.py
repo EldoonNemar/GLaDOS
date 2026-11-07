@@ -229,6 +229,7 @@ class SpeakerClient(ReconnectingWS):
     async def _handle_binary(self, data: bytes) -> None:
         if not data:
             return
+        logger.info("Speaker: received %d bytes binary frame", len(data))
         scheduled_time = self._current_play_time
         rate = self._current_sample_rate
         try:
