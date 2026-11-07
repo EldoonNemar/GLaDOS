@@ -63,8 +63,9 @@ services:
 
 volumes:
   glados-data:
-  glados-models:
 
 networks:
   glados:
     driver: bridge
+  jigowatts_default:
+    external: true
