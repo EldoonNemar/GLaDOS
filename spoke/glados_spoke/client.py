@@ -82,7 +82,7 @@ class SpokeClient:
 
         self._mic_client = MicClient(
 
-            url=_build_url(self.config.hub_host, self.config.hub_port, self.config.mic_path),
+            url=_build_url(self.config.hub_host, self.config.hub_port, "/microphone"),
 
             on_capture=lambda samples: None,
 
@@ -100,7 +100,7 @@ class SpokeClient:
 
         self._speaker_client = SpeakerClient(
 
-            url=_build_url(self.config.hub_host, self.config.hub_port, self.config.speaker_path),
+            url=_build_url(self.config.hub_host, self.config.hub_port, "/speaker"),
 
             on_audio_chunk=self._handle_tts_audio,
 
