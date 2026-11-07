@@ -659,10 +659,30 @@ class WebsocketAudioIO(AudioIO):
                     self._mic_state.current_id = client_id
 
         # VAD is per microphone because it stores context — load in background thread
-        # so the event loop can process WebSocket frames while we initialize
-        loop = asyncio.get_event_loop()
-        vad_model = await loop.run_in_executor(None, VAD)
-        logger.info("VAD loaded, entering recv loop")
+        # using threading so the event loop can process WebSocket frames while we initialize
+        vad_ready = asyncio.Event()
+        vad_model: VAD | None = None
+        vad_error: Exception | None = None
+
+        def _load_vad() -> None:
+            nonlocal vad_model, vad_error
+            try:
+                vad_model = VAD()
+            except Exception as e:
+                vad_error = e
+            finally:
+                vad_ready.set()
+
+        vad_thread = threading.Thread(target=_load_vad, daemon=True)
+        vad_thread.start()
+
+        # Wait for VAD to load (non-blocking: event loop processes WS frames while waiting)
+        await asyncio.wait_for(vad_ready.wait(), timeout=30.0)
+
+        if vad_error:
+            logger.error("VAD loading failed: {}", vad_error)
+            return
+        assert vad_model is not None
         # needed amount of samples for VAD
         vad_needed_samples = self.SAMPLE_RATE * self.VAD_SIZE // 1000
         # currently stored samples
