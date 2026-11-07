@@ -498,17 +498,17 @@ class WebsocketAudioIO(AudioIO):
         Args:
             websocket: Websocket connection
         """
-        request = websocket.request
-        if request is None:
-            logger.error("WebSocket connection has no request path")
+        path = websocket.path
+        if path is None:
+            logger.error("WebSocket connection has no path")
             return
 
-        if request.path == "/speaker":
+        if path == "/speaker":
             await self._server_speaker(websocket)
-        elif request.path == "/microphone":
+        elif path == "/microphone":
             await self._server_microphone(websocket)
         else:
-            logger.error(f"Unknown websocket path: '{request.path}'")
+            logger.error(f"Unknown websocket path: '{path}'")
 
     async def _server_speaker(self, websocket: websockets.ServerConnection) -> None:
         """
