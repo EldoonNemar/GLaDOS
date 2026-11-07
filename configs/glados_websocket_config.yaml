@@ -7,7 +7,7 @@ Glados:
   audio_io_options:
     server: "127.0.0.1"   # WebSocket listen address
     port: 5051            # WebSocket listen port
-    vad_threshold: 0.1    # Low threshold for quiet built-in laptop mic
+    vad_threshold: 0.01    # Very low for weak built-in laptop mic
     rooms: false          # multi-microphone room choreography (off by default)
     segregate_speakers: false
     default_room_tag: "office"
