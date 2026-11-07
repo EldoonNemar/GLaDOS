@@ -506,13 +506,13 @@ class WebsocketAudioIO(AudioIO):
         path = websocket.request.path if websocket.request else "/"
 
         if path == "/speaker":
-            logger.info("Speaker client connecting from %s", websocket.remote_address)
+            logger.info("Speaker client connecting from {}", websocket.remote_address)
             await self._server_speaker(websocket)
         elif path == "/microphone":
-            logger.info("Mic client connecting from %s", websocket.remote_address)
+            logger.info("Mic client connecting from {}", websocket.remote_address)
             await self._server_microphone(websocket)
         else:
-            logger.error("Unknown websocket path: '%s' from %s", path, websocket.remote_address)
+            logger.error("Unknown websocket path: '{}' from {}", path, websocket.remote_address)
             await websocket.close(1008, f"Unknown path: {path}")
 
     async def _server_speaker(self, websocket: websockets.ServerConnection) -> None:
@@ -643,7 +643,7 @@ class WebsocketAudioIO(AudioIO):
         """
         # unique ID for the client
         client_id = uuid.uuid4()
-        logger.info("Mic client connected: %s from %s", client_id, websocket.remote_address),
+        logger.info("Mic client connected: {} from {}", client_id, websocket.remote_address)
         # VAD is per microphone because it stores context
         vad_model = VAD()
         # needed amount of samples for VAD
