@@ -239,9 +239,12 @@ class SpeakerClient(ReconnectingWS):
 
     async def _play(self, data: bytes, scheduled_time: float, sample_rate: int) -> None:
         """Play one scheduled track and acknowledge its completion."""
-        await asyncio.sleep(max(0.0, scheduled_time - time.time()))
+        wait_time = max(0.0, scheduled_time - time.time())
+        logger.info("Speaker: playing %d samples (%.1fs) at %d Hz, waiting %.2fs", len(data)//4, len(data)/4/sample_rate, sample_rate, wait_time)
+        await asyncio.sleep(wait_time)
         sd.play(np.frombuffer(data, dtype=np.float32), sample_rate, device=self.spk_device)
         await asyncio.to_thread(sd.wait)
+        logger.info("Speaker: playback complete")
         try:
             if self._ws and self._ws.state.name == "OPEN":
                 await self._ws.send("played")
