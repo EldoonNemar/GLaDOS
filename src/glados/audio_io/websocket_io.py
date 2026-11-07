@@ -682,7 +682,7 @@ class WebsocketAudioIO(AudioIO):
             if isinstance(msg, str) and msg.startswith("room:"):
                 room = msg.split(":", maxsplit=1)[1]
             elif isinstance(msg, bytes) and self._is_listening:
-                logger.debug("Received mic frame: {} bytes", len(msg))
+                logger.info("Received mic frame: {} bytes", len(msg))
                 if len(msg) % np.dtype(np.float32).itemsize != 0:
                     logger.warning("Ignoring microphone frame with invalid float32 byte length: {}", len(msg))
                     continue
