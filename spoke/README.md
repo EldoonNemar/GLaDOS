@@ -4,14 +4,25 @@ Lightweight voice endpoint for the GLaDOS hub-and-spoke system.
 
 ## Install
 
+### Option 1: Virtual environment (recommended)
+
 ```bash
-pip install glados-spoke
+# Clone the repo if you haven't already
+git clone https://github.com/EldoonNemar/GLaDOS.git
+cd GLaDOS/spoke
+
+# Create and activate a virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
+
+# Install the spoke package
+pip install -e .
 ```
 
-Or install from source:
+### Option 2: pipx (for CLI tools)
+
 ```bash
-cd /opt/GLaDOS/spoke
-pip install -e .
+pipx install glados-spoke
 ```
 
 ## Usage
@@ -51,3 +62,34 @@ The spoke handles only local audio I/O. All ASR, LLM inference, and TTS happen o
 - numpy (for audio processing)
 - pydantic (for config)
 - Optional: scipy (for resampling)
+
+## Systemd Service (always-on, e.g. Raspberry Pi)
+
+Create `/etc/systemd/system/glados-spoke.service`:
+
+```ini
+[Unit]
+Description=GLaDOS Spoke Client
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cphipps
+WorkingDirectory=/home/cphipps/GLaDOS/spoke
+ExecStart=/home/cphipps/GLaDOS/spoke/.venv/bin/python -m glados_spoke.client --hub 192.168.1.100 --port 5051
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Then enable and start:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable glados-spoke
+sudo systemctl start glados-spoke
+sudo systemctl status glados-spoke   # verify it's running
+```
