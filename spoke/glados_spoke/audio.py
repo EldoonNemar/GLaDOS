@@ -97,6 +97,14 @@ class SpokeAudio:
             logger.warning("Mic status: %s", status)
         logger.debug("Mic callback: shape=%s, status=%s", indata.shape, status)
         samples = np.ascontiguousarray(indata[:, 0], dtype=np.float32) * self.mic_volume
+        
+        # Normalize audio to [-1, 1] range for consistent ASR performance
+        peak = np.max(np.abs(samples))
+        if peak > 1.0:
+            samples = samples / peak
+        elif peak < 0.01 and len(samples) > 0:  # Skip very quiet audio
+            return
+        
         if self._aec is not None and len(self._playback_ref) >= self._aec.order:
             samples = self._aec.process(samples, self._playback_ref)
         if self._callback:
