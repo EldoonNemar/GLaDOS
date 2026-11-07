@@ -245,7 +245,7 @@ class SpokeClient:
 
                     duration = len(samples) / self.config.spk_sample_rate
 
-                    time.sleep(duration * 0.85)
+                    time.sleep(duration)
 
                 except Exception:
 
