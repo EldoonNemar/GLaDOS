@@ -97,6 +97,7 @@ class ReconnectingWS:
             self.url,
             ping_interval=self.heartbeat_interval_s,
             ping_timeout=self.heartbeat_interval_s * 3,
+            compression=None,
         ) as ws:
             self._ws = ws
             self._attempt = 0
