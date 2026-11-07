@@ -54,7 +54,12 @@ class JitterBuffer:
 
         self._lock = threading.Lock()
 
-
+    def clear(self) -> None:
+        """Clear all buffered audio."""
+        with self._lock:
+            self._write_pos = 0
+            self._read_pos = 0
+            self._filled = 0
 
     def push(self, samples: NDArray[np.float32]) -> None:
 

@@ -214,6 +214,9 @@ class SpokeClient:
 
             return
 
+        # Clear old audio before pushing new TTS
+        self._jitter.clear()
+
         # Split large audio chunks into 100ms pieces for the jitter buffer
         chunk_size = sample_rate // 10  # 100ms in samples
         loop = asyncio.get_running_loop()
