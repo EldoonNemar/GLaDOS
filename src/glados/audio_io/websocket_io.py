@@ -595,10 +595,12 @@ class WebsocketAudioIO(AudioIO):
                 continue
 
             try:
-                # Send timestamp, then sample rate, then bytes
+                # Send timestamp, then sample rate, then audio in chunks
                 await websocket.send("time:" + str(play_time))
                 await websocket.send("sampleRate:" + str(sample_rate))
-                await websocket.send(audio_data_bytes)
+                chunk_size = 1600  # 100ms chunks at 16kHz
+                for i in range(0, len(audio_data_bytes), chunk_size):
+                    await websocket.send(audio_data_bytes[i:i+chunk_size])
 
                 logger.debug(f"Playing audio with sample rate: {sample_rate} Hz, length: {sample_count} samples")
             except websockets.exceptions.ConnectionClosed:
