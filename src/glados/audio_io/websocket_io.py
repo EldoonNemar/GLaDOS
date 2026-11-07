@@ -58,7 +58,7 @@ class WebsocketAudioIO(AudioIO):
 
     SAMPLE_RATE: int = 16000  # Sample rate for input stream
     VAD_SIZE: int = 32  # Milliseconds of sample for Voice Activity Detection (VAD)
-    VAD_THRESHOLD: float = 0.5  # Threshold for VAD detection
+    VAD_THRESHOLD: float = 0.8  # Threshold for VAD detection
     SERVER: str = "0.0.0.0"  # websockets server listen address
     PORT: int = 5051  # websockets server port
     SPEAKER_SYNC_DELAY_MS: int = 250  # Milliseconds to add to start time to account for speaker synchronisation
@@ -476,11 +476,7 @@ class WebsocketAudioIO(AudioIO):
         self._server_loop = asyncio.get_running_loop()
         try:
             try:
-                server_instance = await websockets.serve(
-                    self._server_listen,
-                    host=server,
-                    port=port,
-                )
+                server_instance = await websockets.serve(self._server_listen, host=server, port=port)
                 self._server_instance = server_instance
                 if not result_future.done():
                     result_future.set_result(None)
@@ -502,18 +498,17 @@ class WebsocketAudioIO(AudioIO):
         Args:
             websocket: Websocket connection
         """
-        # Route based on the request path
-        path = websocket.request.path if websocket.request else "/"
+        request = websocket.request
+        if request is None:
+            logger.error("WebSocket connection has no request path")
+            return
 
-        if path == "/speaker":
-            logger.info("Speaker client connecting from {}", websocket.remote_address)
+        if request.path == "/speaker":
             await self._server_speaker(websocket)
-        elif path == "/microphone":
-            logger.info("Mic client connecting from {}", websocket.remote_address)
+        elif request.path == "/microphone":
             await self._server_microphone(websocket)
         else:
-            logger.error("Unknown websocket path: '{}' from {}", path, websocket.remote_address)
-            await websocket.close(1008, f"Unknown path: {path}")
+            logger.error(f"Unknown websocket path: '{request.path}'")
 
     async def _server_speaker(self, websocket: websockets.ServerConnection) -> None:
         """
@@ -600,12 +595,10 @@ class WebsocketAudioIO(AudioIO):
                 continue
 
             try:
-                # Send timestamp, then sample rate, then audio in chunks
+                # Send timestamp, then sample rate, then bytes
                 await websocket.send("time:" + str(play_time))
                 await websocket.send("sampleRate:" + str(sample_rate))
-                chunk_size = 1600  # 100ms chunks at 16kHz
-                for i in range(0, len(audio_data_bytes), chunk_size):
-                    await websocket.send(audio_data_bytes[i:i+chunk_size])
+                await websocket.send(audio_data_bytes)
 
                 logger.debug(f"Playing audio with sample rate: {sample_rate} Hz, length: {sample_count} samples")
             except websockets.exceptions.ConnectionClosed:
@@ -643,46 +636,8 @@ class WebsocketAudioIO(AudioIO):
         """
         # unique ID for the client
         client_id = uuid.uuid4()
-        logger.info("Mic client connected: {} from {}", client_id, websocket.remote_address)
-
-        # send sample rate immediately (before VAD loads)
-        try:
-            await websocket.send("sampleRate:" + str(self.SAMPLE_RATE))
-        except websockets.exceptions.ConnectionClosed:
-            return
-
-        # The default mode is deliberately single-source: the first connected
-        # microphone owns input until it disconnects or listening stops.
-        if not self._rooms:
-            async with self._mic_state_lock:
-                if self._mic_state.current_id is None:
-                    self._mic_state.current_id = client_id
-
-        # VAD is per microphone because it stores context — load in background thread
-        # using threading so the event loop can process WebSocket frames while we initialize
-        vad_ready = asyncio.Event()
-        vad_model: VAD | None = None
-        vad_error: Exception | None = None
-
-        def _load_vad() -> None:
-            nonlocal vad_model, vad_error
-            try:
-                vad_model = VAD()
-            except Exception as e:
-                vad_error = e
-            finally:
-                vad_ready.set()
-
-        vad_thread = threading.Thread(target=_load_vad, daemon=True)
-        vad_thread.start()
-
-        # Wait for VAD to load (non-blocking: event loop processes WS frames while waiting)
-        await asyncio.wait_for(vad_ready.wait(), timeout=30.0)
-
-        if vad_error:
-            logger.error("VAD loading failed: {}", vad_error)
-            return
-        assert vad_model is not None
+        # VAD is per microphone because it stores context
+        vad_model = VAD()
         # needed amount of samples for VAD
         vad_needed_samples = self.SAMPLE_RATE * self.VAD_SIZE // 1000
         # currently stored samples
@@ -696,19 +651,29 @@ class WebsocketAudioIO(AudioIO):
                 if self._mic_state.current_id == client_id:
                     self._clear_microphone_ownership()
 
+        # send sample rate
+        try:
+            await websocket.send("sampleRate:" + str(self.SAMPLE_RATE))
+        except websockets.exceptions.ConnectionClosed:
+            return
+
+        # The default mode is deliberately single-source: the first connected
+        # microphone owns input until it disconnects or listening stops.
+        if not self._rooms:
+            async with self._mic_state_lock:
+                if self._mic_state.current_id is None:
+                    self._mic_state.current_id = client_id
+
         while True:
-            logger.info("Mic handler: entering recv loop for {}", client_id)
             # wait for audio
             try:
                 msg = await websocket.recv()
-                logger.info("Mic handler: received {} bytes, type={}", len(msg) if isinstance(msg, bytes) else len(msg.encode()), type(msg).__name__)
             except websockets.exceptions.ConnectionClosed:
                 break
 
             if isinstance(msg, str) and msg.startswith("room:"):
                 room = msg.split(":", maxsplit=1)[1]
             elif isinstance(msg, bytes) and self._is_listening:
-                logger.info("Received mic frame: {} bytes", len(msg))
                 if len(msg) % np.dtype(np.float32).itemsize != 0:
                     logger.warning("Ignoring microphone frame with invalid float32 byte length: {}", len(msg))
                     continue
