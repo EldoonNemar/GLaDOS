@@ -9,6 +9,7 @@ import time
 from typing import Any, Awaitable, Callable
 
 import numpy as np
+import sounddevice as sd
 import websockets
 
 
@@ -196,18 +197,34 @@ class MicClient(ReconnectingWS):
 
 
 class SpeakerClient(ReconnectingWS):
-    """Speaker client: receives TTS audio from /speaker and plays it."""
+    """Speaker client: receives TTS audio from /speaker and plays it.
+
+    Matches the upstream reference client — no jitter buffer, just direct playback.
+    """
 
     def __init__(
         self,
         url: str,
-        on_audio_chunk: Callable[[bytes, float, int], Awaitable[None]] | None = None,
+        spk_device: str | int | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(url, **kwargs)
-        self.on_audio_chunk = on_audio_chunk
+        self.spk_device = spk_device
         self._current_sample_rate: int = 22050
         self._current_play_time: float = 0.0
+        self._playback_task: asyncio.Task[None] | None = None
+
+    async def _stop_playback(self) -> None:
+        """Cancel pending playback and stop the output device."""
+        if self._playback_task is None:
+            return
+        sd.stop()
+        self._playback_task.cancel()
+        try:
+            await self._playback_task
+        except asyncio.CancelledError:
+            pass
+        self._playback_task = None
 
     async def _handle_binary(self, data: bytes) -> None:
         if not data:
@@ -215,10 +232,21 @@ class SpeakerClient(ReconnectingWS):
         scheduled_time = self._current_play_time
         rate = self._current_sample_rate
         try:
-            if self.on_audio_chunk:
-                await self.on_audio_chunk(data, scheduled_time, rate)
+            await self._stop_playback()
+            self._playback_task = asyncio.create_task(self._play(data, scheduled_time, rate))
         except Exception:
-            logger.exception("SpeakerClient: error playing audio chunk")
+            logger.exception("SpeakerClient: error scheduling audio")
+
+    async def _play(self, data: bytes, scheduled_time: float, sample_rate: int) -> None:
+        """Play one scheduled track and acknowledge its completion."""
+        await asyncio.sleep(max(0.0, scheduled_time - time.time()))
+        sd.play(np.frombuffer(data, dtype=np.float32), sample_rate, device=self.spk_device)
+        await asyncio.to_thread(sd.wait)
+        try:
+            if self._ws and self._ws.state.name == "OPEN":
+                await self._ws.send("played")
+        except Exception:
+            pass
 
     async def _handle_text(self, text: str) -> None:
         if text.startswith("time:"):
@@ -226,4 +254,4 @@ class SpeakerClient(ReconnectingWS):
         elif text.startswith("sampleRate:"):
             self._current_sample_rate = int(text.split(":", 1)[1])
         elif text == "reset":
-            pass
+            await self._stop_playback()

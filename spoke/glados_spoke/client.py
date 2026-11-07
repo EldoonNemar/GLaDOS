@@ -14,15 +14,12 @@ import sys
 
 import threading
 
-import time
-
 import numpy as np
 
 from .audio import SpokeAudio
 
 from .config import SpokeConfig
 
-from .jitter_buffer import JitterBuffer
 
 from .ws_client import MicClient, SpeakerClient, ReconnectingWS, _build_url
 
@@ -67,19 +64,6 @@ class SpokeClient:
             echo_aec_order=self.config.echo_aec_order,
 
         )
-
-        self._jitter = JitterBuffer(
-
-            sample_rate=self.config.spk_sample_rate,
-
-            min_ms=self.config.jitter_buffer_min_ms,
-
-            max_ms=self.config.jitter_buffer_max_ms,
-
-            adapt_speed=self.config.jitter_adapt_speed,
-
-        )
-
         self._mic_client = MicClient(
 
             url=_build_url(self.config.hub_host, self.config.hub_port, "/microphone"),
@@ -102,7 +86,7 @@ class SpokeClient:
 
             url=_build_url(self.config.hub_host, self.config.hub_port, "/speaker"),
 
-            on_audio_chunk=self._handle_tts_audio,
+            spk_device=self.config.spk_device,
 
             reconnect_base_delay=self.config.reconnect_base_delay,
 
@@ -133,11 +117,6 @@ class SpokeClient:
         await self._mic_client.start()
 
         await self._speaker_client.start()
-
-        self._playback_thread = threading.Thread(target=self._playback_loop, name="spoke-playback", daemon=True)
-
-        self._playback_thread.start()
-
         logger.info("Spoke started. Waiting for shutdown...")
 
         await self._wait_for_shutdown()
@@ -204,61 +183,6 @@ class SpokeClient:
 
             pass
 
-
-
-    async def _handle_tts_audio(self, data: bytes, play_time: float, sample_rate: int) -> None:
-
-        samples = np.frombuffer(data, dtype=np.float32)
-
-        if len(samples) == 0:
-
-            return
-
-        # Clear old audio before pushing new TTS
-        self._jitter.clear()
-
-        # Split large audio chunks into 100ms pieces for the jitter buffer
-        chunk_size = sample_rate // 10  # 100ms in samples
-        loop = asyncio.get_running_loop()
-        for i in range(0, len(samples), chunk_size):
-            chunk = samples[i:i+chunk_size]
-            await loop.run_in_executor(None, self._jitter.push, chunk)
-
-
-
-    def _playback_loop(self) -> None:
-
-        buf_size = self.config.spk_sample_rate // 10  # 100ms chunks
-
-        while self._running and not self._shutdown.is_set():
-
-            try:
-
-                samples = self._jitter.pop(buf_size)
-
-                if len(samples) == 0:
-
-                    time.sleep(0.001)
-
-                    continue
-
-                self._audio.play_audio(samples)
-
-                try:
-
-                    duration = len(samples) / self.config.spk_sample_rate
-
-                    time.sleep(duration)
-
-                except Exception:
-
-                    pass
-
-            except Exception:
-
-                logger.exception("Playback loop error")
-
-                time.sleep(0.1)
 
 
 
