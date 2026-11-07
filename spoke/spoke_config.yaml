@@ -1,0 +1,44 @@
+# GLaDOS Spoke Client — Raspberry Pi configuration
+#
+# Install on Raspberry Pi:
+#   pip install glados-spoke
+#
+# Run:
+#   glados-spoke --hub 192.168.1.100 --port 5051
+#   glados-spoke --hub 192.168.1.100 --port 5051 --aec --mic-device 0
+
+spoke:
+  # --- Hub connection ---
+  hub_host: "127.0.0.1"
+  hub_port: 5051
+
+  # --- Reconnection ---
+  reconnect_base_delay: 1.0
+  reconnect_max_delay: 30.0
+  reconnect_jitter: 0.5
+  reconnect_attempts: null
+
+  # --- Audio capture (mic to hub) ---
+  mic_sample_rate: 16000
+  mic_channels: 1
+  mic_chunk_frames: 512
+  mic_device: null
+  mic_volume: 1.0
+
+  # --- Audio playback (hub to spoke) ---
+  spk_sample_rate: 22050
+  spk_device: null
+
+  # --- Jitter buffer ---
+  jitter_buffer_min_ms: 80
+  jitter_buffer_max_ms: 400
+  jitter_adapt_speed: 0.1
+
+  # --- Echo cancellation ---
+  echo_aec_enabled: false
+  echo_aec_order: 256
+  echo_mute_on_detection_ms: 0
+
+  # --- Logging ---
+  log_level: "INFO"
+  heartbeat_interval_s: 5.0

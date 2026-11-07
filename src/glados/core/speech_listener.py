@@ -22,6 +22,7 @@ from ..ASR import TranscriberProtocol
 from ..audio_io import AudioProtocol
 from ..observability import ObservabilityBus, trim_message
 from .audio_state import AudioState
+from .echo_detector import EchoDetector
 from .native_audio import NativeAudioInput
 
 # Callback signature: (event_type: str) -> None
@@ -60,6 +61,7 @@ class SpeechListener:
         audio_state: AudioState | None = None,
         on_interrupt: InterruptCallback | None = None,
         native_audio: NativeAudioInput | None = None,
+        echo_detector: EchoDetector | None = None,
         begin_user_turn: Callable[[], int] | None = None,
         end_user_turn: Callable[[int, str], None] = lambda generation, reason: None,
         turn_is_current: Callable[[int], bool] = lambda generation: True,
@@ -83,6 +85,7 @@ class SpeechListener:
         self.wake_word = wake_word.lower() if wake_word else None
         self.pause_time = pause_time
         self.interruptible = interruptible
+        self._echo_detector = echo_detector
 
         # Circular buffer to hold pre-activation samples
         self._buffer: deque[NDArray[np.float32]] = deque(maxlen=self.BUFFER_SIZE // self.VAD_SIZE)
@@ -413,6 +416,12 @@ class SpeechListener:
 
         if detected_text:
             logger.success(f"ASR text: '{detected_text}'")
+
+            # Echo detection: discard if transcription matches recently spoken text
+            if self._echo_detector and self._echo_detector.check_echo(detected_text):
+                logger.info(f"Echo detected: '{detected_text}' — discarding (not a user turn)")
+                self.reset(preserve_pending=True)
+                return
 
             if self.wake_word and not self._wakeword_detected(detected_text):
                 logger.info(f"Required wake word {self.wake_word=} not detected.")

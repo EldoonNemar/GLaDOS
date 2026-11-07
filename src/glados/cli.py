@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 
 import httpx
+from loguru import logger
 from rich import print as rprint
 from rich.progress import BarColumn, DownloadColumn, Progress, TextColumn
 import sounddevice as sd  # type: ignore
@@ -452,14 +453,30 @@ def main() -> int:
     say_parser.add_argument("text", type=str, help="Text for GLaDOS to speak")
     parser_add_config(say_parser)
 
+    # Spoke subcommand
+    spoke_parser = subparsers.add_parser("spoke", help="Start GLaDOS spoke client (hub-and-spoke)")
+    spoke_parser.add_argument("--hub", default=None, help="Hub hostname or IP")
+    spoke_parser.add_argument("--port", type=int, default=None, help="Hub WebSocket port")
+    spoke_parser.add_argument("--config", default=None, help="Path to spoke YAML config")
+    spoke_parser.add_argument("--log-level", default="INFO", help="Logging level")
+    spoke_parser.add_argument("--mic-device", type=int, default=None, help="Mic device index")
+    spoke_parser.add_argument("--speaker-device", type=int, default=None, help="Speaker device index")
+    spoke_parser.add_argument("--aec", action="store_true", help="Enable AEC")
+    spoke_parser.add_argument("--aec-order", type=int, default=256, help="AEC filter order")
+    spoke_parser.add_argument("--echo-threshold", type=float, default=0.7, help="Echo detection threshold")
+    spoke_parser.add_argument("--native-audio", action="store_true", default=True, help="Use native audio")
+    spoke_parser.add_argument("--reconnect-base", type=float, default=1.0, help="Reconnect base delay (s)")
+    spoke_parser.add_argument("--reconnect-max", type=float, default=30.0, help="Reconnect max delay (s)")
+    spoke_parser.add_argument("--jitter-min", type=int, default=80, help="Min jitter buffer (ms)")
+    spoke_parser.add_argument("--jitter-max", type=int, default=400, help="Max jitter buffer (ms)")
+
     args = parser.parse_args()
 
     if args.command == "download":
         return asyncio.run(download_models())
     else:
         if not models_valid():
-            print("Some model files are invalid or missing. Please run 'uv run glados download'")
-            return 1
+            logger.warning("Some model files are invalid or missing - hub will run without them")
         if args.command == "say":
             say(args.text, args.config)
         elif args.command == "start":
@@ -484,6 +501,9 @@ def main() -> int:
                 tts_enabled=args.tts_enabled,
                 asr_muted=args.asr_muted,
             )
+        elif args.command == "spoke":
+            from .spoke.client import main as spoke_main
+            spoke_main()
         else:
             # Default to start if no command specified
             start(DEFAULT_CONFIG)

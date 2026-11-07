@@ -12,6 +12,7 @@ from ..audio_io import AudioProtocol
 from ..observability import ObservabilityBus, trim_message
 from .audio_data import AudioMessage
 from .conversation_store import ConversationStore
+from .echo_detector import EchoDetector
 from .speech_animation import SpeechAnimationState
 
 if TYPE_CHECKING:
@@ -46,6 +47,7 @@ class SpeechPlayer:
         on_autonomy_done: Callable[[str, str, str], None] | None = None,
         on_response_started: Callable[[int], None] | None = None,
         playback_lock: threading.RLock | None = None,
+        echo_detector: "EchoDetector | None" = None,
     ) -> None:
         self.audio_io = audio_io
         self.audio_output_queue = audio_output_queue
@@ -65,6 +67,7 @@ class SpeechPlayer:
         self._on_autonomy_done = on_autonomy_done
         self._on_response_started = on_response_started
         self._playback_lock = playback_lock or threading.RLock()
+        self._echo_detector = echo_detector
 
     def _autonomy_current(self, generation: int | None) -> bool:
         return generation is None or (self._autonomy_enabled() and generation == self._autonomy_generation())
@@ -210,6 +213,9 @@ class SpeechPlayer:
                     else:  # Playback completed normally
                         logger.debug(f"AudioPlayer: Playback completed for: '{audio_msg.text}'")
                         assistant_text_accumulator.append(audio_msg.text)
+                        # Record spoken text for hub-side echo detection
+                        if self._echo_detector:
+                            self._echo_detector.record_spoken(" ".join(assistant_text_accumulator))
                         if self._observability_bus:
                             self._observability_bus.emit(
                                 source="tts",

@@ -54,6 +54,7 @@ from .audio_state import AudioState
 from .context import ContextBuilder
 from .conversation_store import ConversationStore
 from .decision_lists import DecisionListStore
+from .echo_detector import EchoDetector
 from .inference import InferenceConfig, InferenceScheduler
 from .knowledge_store import KnowledgeStore
 from .llm_processor import LanguageModelProcessor
@@ -153,6 +154,7 @@ class GladosConfig(BaseModel):
     autonomy: AutonomyConfig | None = None
     mcp_servers: list[MCPServerConfig] | None = None
     webapp: WebappConfig | None = None
+    echo: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def _validate_native_audio(self) -> "GladosConfig":
@@ -198,6 +200,98 @@ class GladosConfig(BaseModel):
                 "port": env_port or base.port,
             }
         )
+        return self
+
+    @model_validator(mode="after")
+    def _apply_hub_env(self) -> "GladosConfig":
+        """Override config values from environment variables for Docker/hub deployments.
+
+        Environment variables override YAML config values when set::
+
+            GLADOS_LLM_URL=http://llama_rocm:8080/v1/chat/completions \
+            GLADOS_LLM_MODEL=gemma-4-E4B \
+            GLADOS_NATIVE_AUDIO_ENABLED=true \
+            GLADOS_AUDIO_IO=websocket \
+            docker compose up -d hub
+        """
+        # LLM URL and model
+        url = os.environ.get("GLADOS_LLM_URL")
+        if url:
+            self.completion_url = HttpUrl(url)
+        model = os.environ.get("GLADOS_LLM_MODEL")
+        if model:
+            self.llm_model = model
+
+        # Native audio
+        na_enabled = os.environ.get("GLADOS_NATIVE_AUDIO_ENABLED")
+        if na_enabled is not None:
+            enabled = na_enabled.strip().lower() in ("1", "true", "yes")
+            if self.native_audio:
+                self.native_audio.enabled = enabled
+            else:
+                self.native_audio = NativeAudioConfig(enabled=enabled)
+
+        na_transcripts = os.environ.get("GLADOS_NATIVE_AUDIO_USER_TRANSCRIPTS")
+        if na_transcripts is not None:
+            self.native_audio.user_transcripts = na_transcripts.strip().lower() in ("1", "true", "yes")
+
+        na_lang = os.environ.get("GLADOS_NATIVE_AUDIO_LANGUAGE")
+        if na_lang:
+            self.native_audio.language = na_lang
+
+        na_max = os.environ.get("GLADOS_NATIVE_AUDIO_MAX_DURATION_S")
+        if na_max:
+            try:
+                self.native_audio.max_duration_s = float(na_max)
+            except ValueError:
+                pass
+
+        # Audio I/O backend
+        aio = os.environ.get("GLADOS_AUDIO_IO")
+        if aio:
+            self.audio_io = aio
+
+        aio_server = os.environ.get("GLADOS_AUDIO_IO_OPTIONS_SERVER")
+        aio_port = os.environ.get("GLADOS_AUDIO_IO_OPTIONS_PORT")
+        if aio_server or aio_port:
+            opts = dict(self.audio_io_options or {})
+            if aio_server:
+                opts["server"] = aio_server
+            if aio_port:
+                try:
+                    opts["port"] = int(aio_port)
+                except ValueError:
+                    pass
+            self.audio_io_options = opts
+
+        # Echo detection
+        echo_thresh = os.environ.get("GLADOS_ECHO_TEXT_SIMILARITY_THRESHOLD")
+        if echo_thresh:
+            try:
+                echo = self.echo or {}
+                echo["text_similarity_threshold"] = float(echo_thresh)
+                self.echo = echo
+            except ValueError:
+                pass
+
+        echo_min = os.environ.get("GLADOS_ECHO_TEXT_MIN_LENGTH")
+        if echo_min:
+            try:
+                echo = self.echo or {}
+                echo["text_min_length"] = int(echo_min)
+                self.echo = echo
+            except ValueError:
+                pass
+
+        echo_turns = os.environ.get("GLADOS_ECHO_RECENT_TURNS")
+        if echo_turns:
+            try:
+                echo = self.echo or {}
+                echo["recent_turns"] = int(echo_turns)
+                self.echo = echo
+            except ValueError:
+                pass
+
         return self
 
     @classmethod
@@ -368,6 +462,9 @@ class Glados:
         # Initialize threads for each component
         self.component_threads: list[threading.Thread] = []
 
+        # Default echo detector (may be replaced in from_config)
+        self.echo_detector = EchoDetector()
+
         self._init_listeners()
 
         self._init_primary_processor(llm_headers, llm_request_options, routing_config)
@@ -519,6 +616,7 @@ class Glados:
                 audio_state=self.audio_state,
                 on_interrupt=lambda _: self._push_emotion_event("user", "User interrupted me mid-sentence"),
                 native_audio=self.native_audio,
+                echo_detector=self.echo_detector,
                 begin_user_turn=self._begin_user_turn,
                 end_user_turn=self.inference_scheduler.end_interaction,
                 turn_is_current=lambda generation: generation == self._quiet_generation,
@@ -700,6 +798,7 @@ class Glados:
             interaction_state=self.interaction_state,
             observability_bus=self.observability_bus,
             speech_animation=self.speech_animation,
+            echo_detector=self.echo_detector,
         )
 
 
@@ -1112,6 +1211,20 @@ class Glados:
         except Exception:
             cls._close_audio_backend(audio_io)
             raise
+
+        # Initialize echo detector (after instance is created)
+        echo_cfg = config.echo or {}
+        self.echo_detector = EchoDetector(
+            similarity_threshold=echo_cfg.get("text_similarity_threshold", 0.7),
+            min_length=echo_cfg.get("text_min_length", 4),
+            recent_turns=echo_cfg.get("recent_turns", 3),
+            bus=self.observability_bus,
+        )
+        # Inject into speech listener and player
+        if hasattr(self, 'speech_listener') and self.speech_listener:
+            self.speech_listener._echo_detector = self.echo_detector
+        if hasattr(self, 'speech_player') and self.speech_player:
+            self.speech_player._echo_detector = self.echo_detector
 
     @staticmethod
     def _close_audio_backend(audio_io: AudioProtocol) -> None:

@@ -1,0 +1,50 @@
+# GLaDOS Spoke Client Configuration
+#
+# Usage: glados spoke --config configs/spoke_config.yaml
+#
+# Or with CLI overrides:
+#   glados spoke --hub 192.168.1.100 --port 5051 --aec
+
+spoke:
+  # --- Hub connection ---
+  hub_host: "127.0.0.1"
+  hub_port: 5051
+
+  # --- Reconnection ---
+  reconnect_base_delay: 1.0
+  reconnect_max_delay: 30.0
+  reconnect_jitter: 0.5
+  reconnect_attempts: null  # null = infinite
+
+  # --- Audio capture (mic to hub) ---
+  mic_sample_rate: 16000
+  mic_channels: 1
+  mic_chunk_frames: 512
+  mic_device: null
+  mic_volume: 1.0
+
+  # --- Audio playback (hub to spoke) ---
+  spk_sample_rate: 22050
+  spk_device: null
+
+  # --- Jitter buffer ---
+  jitter_buffer_min_ms: 80
+  jitter_buffer_max_ms: 400
+  jitter_adapt_speed: 0.1
+
+  # --- Echo detection ---
+  echo_text_similarity_threshold: 0.7
+  echo_text_min_length: 4
+  echo_text_recent_turns: 3
+  echo_waveform_threshold: 0.6
+  echo_aec_enabled: false
+  echo_aec_order: 256
+  echo_mute_on_detection_ms: 0
+
+  # --- Native audio mode ---
+  native_audio: true
+  native_audio_max_duration_s: 30.0
+
+  # --- Logging ---
+  log_level: "INFO"
+  heartbeat_interval_s: 5.0
