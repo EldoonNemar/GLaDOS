@@ -103,14 +103,18 @@ class SpokeAudio:
             self._callback(samples)
 
     def start_speaker(self) -> None:
-        self._spk_stream = sd.OutputStream(
-            samplerate=self.spk_sample_rate,
-            channels=1,
-            device=self.spk_device,
-            latency="low",
-        )
-        self._spk_stream.start()
-        logger.info("Speaker: %d Hz", self.spk_sample_rate)
+        try:
+            self._spk_stream = sd.OutputStream(
+                samplerate=self.spk_sample_rate,
+                channels=1,
+                device=self.spk_device,
+                latency="low",
+            )
+            self._spk_stream.start()
+            logger.info("Speaker: %d Hz", self.spk_sample_rate)
+        except Exception:
+            logger.warning("Speaker output unavailable (TTS will not play)")
+            self._spk_stream = None
 
     def stop_speaker(self) -> None:
         if self._spk_stream:
@@ -124,6 +128,8 @@ class SpokeAudio:
     def play_audio(self, samples: NDArray[np.float32]) -> None:
         if len(samples) == 0:
             return
+        if self._spk_stream is None:
+            return  # No speaker available
         if self.spk_sample_rate != 16000:
             from scipy import signal
             divisor = math.gcd(16000, self.spk_sample_rate)
