@@ -104,7 +104,10 @@ def get_audio_system(
     elif backend_type == "websocket":
         from .websocket_io import WebsocketAudioIO
 
-        return WebsocketAudioIO(vad_threshold=vad_threshold, options=backend_options)
+        options = dict(backend_options or {})
+        # vad_threshold is handled separately, remove from options dict
+        options.pop("vad_threshold", None)
+        return WebsocketAudioIO(vad_threshold=vad_threshold, options=options)
     else:
         raise ValueError(f"Unsupported audio backend type: {backend_type}")
 
