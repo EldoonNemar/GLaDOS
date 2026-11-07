@@ -22,7 +22,7 @@ services:
       - GLADOS_LLM_URL=http://llama_rocm:8080/v1/chat/completions
       - GLADOS_LLM_MODEL=gemma-4-E4B
       # Enable native audio mode for lowest latency
-      - GLADOS_NATIVE_AUDIO_ENABLED=true
+      - GLADOS_NATIVE_AUDIO_ENABLED=false
       - GLADOS_NATIVE_AUDIO_USER_TRANSCRIPTS=false
       - GLADOS_NATIVE_AUDIO_LANGUAGE=English
       # WebSocket audio backend for spoke connections
