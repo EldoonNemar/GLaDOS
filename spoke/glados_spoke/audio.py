@@ -182,6 +182,7 @@ class SpokeAudio:
 
             logger.warning("Mic status: %s", status)
 
+        logger.info("Mic callback: indata shape=%s, volume=%.2f", indata.shape, self.mic_volume)
         samples = np.ascontiguousarray(indata[:, 0], dtype=np.float32) * self.mic_volume
 
         if self._aec is not None and len(self._playback_ref) >= self._aec.order:
