@@ -155,6 +155,7 @@ class MicClient(ReconnectingWS):
             asyncio.run_coroutine_threadsafe(self._safe_send(data), loop)
 
     async def _safe_send(self, data: bytes) -> None:
+        logger.debug("MicClient._safe_send called, ws state=%s", self._ws.state.name if self._ws else "None")
         if self._ws is not None and self._ws.state.name == "OPEN":
             try:
                 await self._ws.send(data)
