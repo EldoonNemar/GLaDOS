@@ -16,7 +16,7 @@ class AudioTranscriber:
         self,
         model_name: str = "base",
         language: str = "en",
-        device: str = "cpu",
+        device: str | None = None,
         **kwargs: Any,
     ) -> None:
         """Initialize Whisper transcriber.
@@ -24,9 +24,17 @@ class AudioTranscriber:
         Args:
             model_name: Whisper model size (tiny, base, small, medium, large)
             language: Language code (e.g., 'en', 'es', 'fr')
-            device: Device to run inference on ('cpu' or 'cuda')
+            device: Device to run inference on (None = auto-detect)
         """
         import whisper
+
+        if device is None:
+            # Auto-detect: prefer cuda if available, else cpu
+            try:
+                import torch
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+            except ImportError:
+                device = "cpu"
 
         self._whisper = whisper
         self._model = whisper.load_model(model_name, device=device)
