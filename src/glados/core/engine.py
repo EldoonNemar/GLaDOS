@@ -1178,6 +1178,7 @@ class Glados:
         audio_io = get_audio_system(
             backend_type=config.audio_io,
             backend_options=config.audio_io_options,
+            vad_threshold=(config.audio_io_options or {}).get("vad_threshold"),
         )
 
         try:

@@ -198,17 +198,7 @@ class SpokeClient:
 
         try:
 
-            loop = asyncio.get_event_loop()
-
-            if loop.is_running():
-
-                asyncio.run_coroutine_threadsafe(
-
-                    self._mic_client.push_sample(np.ascontiguousarray(samples, dtype=np.float32)),
-
-                    loop,
-
-                )
+            self._mic_client.push_sample(np.ascontiguousarray(samples, dtype=np.float32))
 
         except Exception:
 

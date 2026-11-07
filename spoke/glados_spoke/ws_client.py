@@ -150,7 +150,8 @@ class MicClient(ReconnectingWS):
         if self._ws is not None and self._ws.state.name == "OPEN":
             data = np.ascontiguousarray(samples, dtype=np.float32).tobytes()
             logger.info("Sending mic audio: %d samples = %d bytes", len(samples), len(data))
-            asyncio.create_task(self._safe_send(data))
+            loop = asyncio.get_running_loop()
+            asyncio.run_coroutine_threadsafe(self._safe_send(data), loop)
 
     async def _safe_send(self, data: bytes) -> None:
         if self._ws is not None and self._ws.state.name == "OPEN":
