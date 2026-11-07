@@ -701,6 +701,7 @@ class WebsocketAudioIO(AudioIO):
             # wait for audio
             try:
                 msg = await websocket.recv()
+                logger.info("Mic handler: received {} bytes, type={}", len(msg) if isinstance(msg, bytes) else len(msg.encode()), type(msg).__name__)
             except websockets.exceptions.ConnectionClosed:
                 break
 
