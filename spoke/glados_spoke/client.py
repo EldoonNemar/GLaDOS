@@ -214,9 +214,12 @@ class SpokeClient:
 
             return
 
+        # Split large audio chunks into 100ms pieces for the jitter buffer
+        chunk_size = sample_rate // 10  # 100ms in samples
         loop = asyncio.get_running_loop()
-
-        await loop.run_in_executor(None, self._jitter.push, samples)
+        for i in range(0, len(samples), chunk_size):
+            chunk = samples[i:i+chunk_size]
+            await loop.run_in_executor(None, self._jitter.push, chunk)
 
 
 
