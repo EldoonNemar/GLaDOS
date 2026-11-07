@@ -514,10 +514,10 @@ class WebsocketAudioIO(AudioIO):
 
         if path == "/speaker":
             logger.info("Speaker client connecting from %s", connection.remote_address)
-            await self._server_speaker(connection)
+            asyncio.create_task(self._server_speaker(connection))
         elif path == "/microphone":
             logger.info("Mic client connecting from %s", connection.remote_address)
-            await self._server_microphone(connection)
+            asyncio.create_task(self._server_microphone(connection))
         else:
             logger.error("Unknown websocket path: '%s' from %s", path, connection.remote_address)
             # Close the connection with an error
