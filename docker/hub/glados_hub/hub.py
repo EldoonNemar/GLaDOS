@@ -1,3 +1,4 @@
+import re
 import numpy as np
 """
 glados_hub - WebSocket hub + LLM/TTS orchestrator.
@@ -23,6 +24,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
 
 MAX_CONTEXT_WORDS = 200
 WAKE_WORDS = ["glados", "hey glados"]
+NAME_PATTERN = re.compile(r"(?:i['\s]+am|my name is|call me|you can call me)\s+([a-zA-Z][a-zA-Z'\s-]{1,20})", re.IGNORECASE)
 logger = logging.getLogger("glados_hub")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 
@@ -56,6 +58,7 @@ class GLaDOSConversation:
         self.last_speech_time = 0.0
         # Speaker tracking: voice_id -> {"context": str, "last_heard": float}
         self.speakers: dict = {}
+        self.speaker_names: dict = {}
         self.current_speaker_id: str = None
         self.silence_count: int = 0
         self.speech_active: bool = False
@@ -103,7 +106,7 @@ class GLaDOSConversation:
                     self.speakers[speaker_id]["context"] = " ".join(words[-150:])
             
             # Add to conversation history
-            self.conversation_history.append(f"{speaker_id}: {text.strip()}")
+            n = self.speaker_names.get(speaker_id, speaker_id[:12]); self.conversation_history.append(f"{n}: {text.strip()}")
             # Keep history manageable
             if len(self.conversation_history) > 50:
                 self.conversation_history = self.conversation_history[-50:]
