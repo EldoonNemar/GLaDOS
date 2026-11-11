@@ -187,6 +187,10 @@ def _get_vosk_model():
                 with zipfile.ZipFile(tmp, "r") as z:
                     z.extractall(model_dir)
                 os.remove(tmp)
+                # Zip may extract to nested dir (same name under parent)
+                contents = os.listdir(model_dir)
+                if len(contents) == 1 and os.path.isdir(os.path.join(model_dir, contents[0])):
+                    model_dir = os.path.join(model_dir, contents[0])
             _vosk_model = Model(model_dir)
             logger.info("Vosk model loaded")
         except Exception as e:
@@ -208,14 +212,15 @@ async def transcribe(req: AudioRequest):
             rms = float(np.sqrt(np.mean((audio/32768.0)**2)))
             return TranscriptResponse(text=f"speech detected (rms={rms:.4f})", confidence=0.0)
         
+        import json as _json
         from vosk import KaldiRecognizer
         rec = KaldiRecognizer(model, 16000)
-        rec.AcceptWaveform(audio.tobytes())
-        result = rec.Result()
+        chunk_size = 4000  # ~250ms at 16kHz
+        for i in range(0, len(audio), chunk_size):
+            chunk = audio[i:i+chunk_size].tobytes()
+            rec.AcceptWaveform(chunk)
+        result = _json.loads(rec.FinalResult())
         text = result.get("text", "").strip()
-        if not text:
-            partial = rec.PartialResult()
-            text = partial.get("text", "").strip()
         if not text:
             rms = float(np.sqrt(np.mean((audio/32768.0)**2)))
             text = "silence" if rms < 0.01 else f"speech detected (rms={rms:.4f})"
