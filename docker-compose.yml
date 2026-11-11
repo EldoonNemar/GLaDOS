@@ -54,6 +54,7 @@ services:
     environment:
       - HIP_VISIBLE_DEVICES=0
       - MODEL_DIR=/models
+      - HF_TOKEN=PLACEHOLDER_TOKEN
     networks:
       - glados
 

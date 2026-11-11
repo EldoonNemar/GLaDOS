@@ -1,4 +1,5 @@
 """Speaker diarization using pyannote.audio."""
+import os
 import numpy as np
 import torch
 from pathlib import Path
@@ -8,13 +9,33 @@ logger = logging.getLogger("glados_engine")
 
 _diarizer = None
 _model = None
+_TOKEN = os.environ.get("HF_TOKEN", None)
 
 def get_diarizer():
-    """Use energy-based VAD for speaker separation."""
-    global _diarizer
+    """Lazy-load pyannote diarization model."""
+    global _diarizer, _model
     if _diarizer is None:
-        _diarizer = True
-        logger.info("Energy VAD diarization loaded")
+        try:
+            from pyannote.audio import Pipeline
+            
+            if _TOKEN:
+                logger.info("Loading pyannote diarization model (auth enabled)...")
+                _model = Pipeline.from_pretrained(
+                    "pyannote/speaker-diarization-3.1",
+                    token=_TOKEN
+                )
+            else:
+                logger.warning("No HF_TOKEN set, falling back to energy VAD")
+                _diarizer = True
+                return _diarizer is True
+            
+            _model.to("cuda" if torch.cuda.is_available() else "cpu")
+            _diarizer = True
+            logger.info("Pyannote diarization loaded successfully")
+        except Exception as e:
+            logger.error("Diarization load failed: %s — falling back to VAD", e)
+            _diarizer = True  # Force VAD fallback
+            _model = None
     return _diarizer is True
 
 def diarize(audio_bytes: bytes, sr: int = 16000) -> list:
