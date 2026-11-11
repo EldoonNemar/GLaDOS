@@ -86,33 +86,50 @@ async def send_audio(ws):
 
 async def capture_audio(ws):
     """Capture audio from reSpeaker XVF3800 and stream to hub."""
+    # XVF3800 on Orange Pi is USB audio with 4 mic channels.
+    # We need mono 16kHz. Use ALSA plug to mix 4ch -> 1ch.
+    # Default ALSA device for USB audio is hw:0,0 on Orange Pi.
+    # Also try hw:1,0 and default if those fail.
+    alsa_devices = [
+        "plug:hw:0,0",
+        "plug:hw:1,0",
+        "plug:default",
+    ]
+    
+    logger.info("Available audio devices:")
+    for idx, dev in enumerate(sd.query_devices()):
+        logger.info("  [%d] %s (in: %s, out: %s, rate=%.0fHz)", idx, dev["name"],
+                   "✓" if dev["max_input_channels"] > 0 else "✗",
+                   "✓" if dev["max_output_channels"] > 0 else "✗",
+                   dev["default_samplerate"])
+
     def audio_callback(indata, frames, time_info, status):
         global chunk_count, last_chunk_log
         if status:
             logger.warning("Audio status: %s", status)
-        # Calculate RMS to detect if we're actually getting audio
         rms = np.sqrt(np.mean(indata.astype(np.float32)**2))
-        if rms > 0.001:  # Only log when there's actual audio
-            chunk_count += 1
-            if chunk_count % 20 == 0:
-                logger.info("[LISTENING] Audio level: %.4f RMS (%d chunks)", rms, chunk_count)
+        chunk_count += 1
+        if chunk_count % 20 == 0:
+            logger.info("[LISTENING] Audio level: %.4f RMS (%d chunks)", rms, chunk_count)
         try:
             audio_tx_queue.put_nowait(bytes([0x01]) + indata.tobytes())
         except queue.Full:
             pass
 
-    with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype='int16',
-                        device=AUDIO_DEVICE if AUDIO_DEVICE >= 0 else None,
-                        callback=audio_callback, blocksize=CHUNK_SAMPLES):
-        logger.info("Audio capture started (device=%s, %d Hz)", AUDIO_DEVICE, SAMPLE_RATE)
-        # List available devices
-        logger.info("Available audio devices:")
-        for idx, dev in enumerate(sd.query_devices()):
-            logger.info("  [%d] %s (in: %s, out: %s)", idx, dev["name"],
-                       "✓" if dev["max_input_channels"] > 0 else "✗",
-                       "✓" if dev["max_output_channels"] > 0 else "✗")
-        while True:
-            await asyncio.sleep(0.1)
+    for attempt in range(len(alsa_devices)):
+        alsa_device = alsa_devices[attempt]
+        try:
+            logger.info("Opening audio device %s at %d Hz...", alsa_device, SAMPLE_RATE)
+            with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype='int16',
+                                device=alsa_device,
+                                callback=audio_callback, blocksize=CHUNK_SAMPLES):
+                logger.info("Audio capture started on %s at %d Hz", alsa_device, SAMPLE_RATE)
+                while True:
+                    await asyncio.sleep(0.1)
+        except Exception as e:
+            logger.warning("Device %s failed: %s", alsa_device, e)
+    
+    logger.error("All ALSA devices failed. Spoke cannot capture audio.")
 
 
 async def list_devices():
