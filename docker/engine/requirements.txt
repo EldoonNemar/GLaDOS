@@ -8,3 +8,7 @@ Kokoro-onnx
 vosk
 vosk
 speechrecognition
+pyannote.audio
+torch
+torchaudio
+pyannote.core
