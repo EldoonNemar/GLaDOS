@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # GLaDOS - Docker management script
-# Usage: ./scripts/glados.sh {start|stop|restart|build|logs} [backend|spoke]
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 ACTION=""
-TARGET=""  # backend, spoke, or empty for all
+TARGET=""
 for arg in "$@"; do
     case "$arg" in
         start|stop|restart|build|logs) ACTION="$arg" ;;
@@ -23,7 +22,7 @@ if [[ -z "$ACTION" ]]; then
     echo "  build   - Rebuild Docker images"
     echo "  logs    - Follow logs"
     echo ""
-    echo "Targets (default: both):"
+    echo "Targets (default: backend):"
     echo "  backend - Only LLM + ASR/TTS + hub (the server)"
     echo "  spoke   - Only the Python spoke (connects to a remote hub)"
     echo ""
@@ -32,43 +31,57 @@ if [[ -z "$ACTION" ]]; then
     echo "  ./scripts/glados.sh start spoke        # Start spoke only"
     echo "  ./scripts/glados.sh start backend      # Start backend only"
     echo "  ./scripts/glados.sh stop               # Stop everything"
-    echo ""
-    echo "Note: The spoke connects to a remote hub. Set GLADOS_HUB_URL"
-    echo "      in the spoke container to point to your backend server."
     exit 0
 fi
 
-case "$TARGET" in
-    spoke)
-        echo "[glados] Targeting spoke only..."
-        case "$ACTION" in
-            start)  docker compose up -d --profile spoke glados_spoke ;;
-            stop)   docker compose down glados_spoke ;;
-            restart) docker compose down glados_spoke && docker compose up -d --profile spoke glados_spoke ;;
-            build)  docker compose build glados_spoke ;;
-            logs)   docker compose logs -f glados_spoke ;;
-        esac
+compose() { docker compose "$@"; }
+
+# --profile must come BEFORE the subcommand (up/down/build/logs)
+if [[ "$TARGET" == "spoke" ]]; then
+    PROFILE=(--profile spoke)
+fi
+
+case "$ACTION" in
+    start)
+        echo "[glados] Starting $TARGET..."
+        if [[ "$TARGET" == "spoke" ]]; then
+            compose ${PROFILE[@]} up -d glados_spoke
+        else
+            compose up -d glados_llama glados_engine glados_hub
+            echo "[glados] Backend up. Hub: http://localhost:5050/health"
+        fi
         ;;
-    backend)
-        echo "[glados] Targeting backend only..."
-        case "$ACTION" in
-            start)  docker compose up -d glados_llama glados_engine glados_hub ;;
-            stop)   docker compose down glados_llama glados_engine glados_hub ;;
-            restart) docker compose down glados_llama glados_engine glados_hub && docker compose up -d glados_llama glados_engine glados_hub ;;
-            build)  docker compose build glados_engine glados_hub ;;
-            logs)   docker compose logs -f glados_llama glados_engine glados_hub ;;
-        esac
-        echo "[glados] Backend up. Hub: http://localhost:5050/health"
+    stop)
+        echo "[glados] Stopping $TARGET..."
+        if [[ "$TARGET" == "spoke" ]]; then
+            compose down glados_spoke
+        else
+            compose down glados_llama glados_engine glados_hub
+        fi
         ;;
-    "")
-        echo "[glados] Starting backend..."
-        case "$ACTION" in
-            start)  docker compose up -d glados_llama glados_engine glados_hub ;;
-            stop)   docker compose down glados_llama glados_engine glados_hub ;;
-            restart) docker compose down glados_llama glados_engine glados_hub && docker compose up -d glados_llama glados_engine glados_hub ;;
-            build)  docker compose build glados_engine glados_hub ;;
-            logs)   docker compose logs -f glados_llama glados_engine glados_hub ;;
-        esac
-        echo "[glados] Backend up. Hub: http://localhost:5050/health"
+    restart)
+        echo "[glados] Restarting $TARGET..."
+        if [[ "$TARGET" == "spoke" ]]; then
+            compose down glados_spoke && compose ${PROFILE[@]} up -d glados_spoke
+        else
+            compose down glados_llama glados_engine glados_hub && compose up -d glados_llama glados_engine glados_hub
+            echo "[glados] Backend up. Hub: http://localhost:5050/health"
+        fi
+        ;;
+    build)
+        echo "[glados] Building $TARGET..."
+        if [[ "$TARGET" == "spoke" ]]; then
+            compose ${PROFILE[@]} build glados_spoke
+        else
+            compose build glados_engine glados_hub
+        fi
+        ;;
+    logs)
+        echo "[glados] Showing logs for $TARGET..."
+        if [[ "$TARGET" == "spoke" ]]; then
+            compose logs -f glados_spoke
+        else
+            compose logs -f glados_llama glados_engine glados_hub
+        fi
         ;;
 esac
