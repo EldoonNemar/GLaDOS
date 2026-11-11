@@ -3,15 +3,17 @@
 Uses energy-based VAD to split speech segments, then applies voice fingerprinting
 to assign speaker labels based on pitch/energy characteristics.
 
-Note: The 4-mic XVF3800 provides clean beamformed audio which works well with
-voice fingerprinting. For production multi-speaker scenarios, consider using
-pyannote.audio with a valid HuggingFace token.
+For production multi-speaker scenarios, set HF_TOKEN in .env to enable pyannote.audio.
+Note: pyannote v3.3.2 requires torch/torchaudio < 2.2.0, which may not be available
+for your platform. The VAD fallback works well with the 4-mic XVF3800 beamformed audio.
 """
+import os
 import numpy as np
 import logging
 
 logger = logging.getLogger("glados_engine")
 
+_HF_TOKEN = os.environ.get("HF_TOKEN", "").strip()
 
 def diarize(audio_bytes: bytes, sr: int = 16000) -> list:
     """Diarize audio: return list of {"speaker": str, "start": float, "end": float, "audio": bytes}.
