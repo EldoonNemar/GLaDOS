@@ -56,15 +56,15 @@ class GLaDOSConversation:
         self.audio_buffer = bytearray()
         self.is_listening = False
         self.last_speech_time = 0.0
-        # Speaker tracking: voice_id -> {"context": str, "last_heard": float}
-        self.speakers: dict = {}
-        self.speaker_names: dict = {}
+        # Per-speaker VAD state
+        self.speakers: dict = {}  # speaker_id -> {"context": str, "last_heard": float, "speech_active": bool, "silence_count": int}
+        self.speaker_names: dict = {}  # speaker_id -> name
         self.current_speaker_id: str = None
-        self.silence_count: int = 0
+        self.silence_count: int = 0  # Global silence
         self.speech_active: bool = False
         self.interrupting: bool = False
         # Shared conversation memory
-        self.conversation_history: list = []  # ["speaker1: text", "speaker2: text", ...]
+        self.conversation_history: list = []
     
     def fingerprint_voice(self, audio_bytes: bytes) -> str:
         """Simple voice fingerprint from audio characteristics."""
@@ -87,7 +87,7 @@ class GLaDOSConversation:
                         return sid
             # New speaker
             new_id = f"speaker_{zcr:.2f}_{energy:.1f}_{time.time():.0f}"
-            self.speakers[new_id] = {"context": "", "last_heard": time.time()}
+            self.speakers[new_id] = {"context": "", "last_heard": time.time(), "speech_active": True, "silence_count": 0}
             logger.info("[glados] New speaker: %s", new_id)
             return new_id
         except Exception as e:
@@ -156,9 +156,18 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
                         session.silence_count = 0
                     elif session.speech_active:
                         session.silence_count += 1
-                        if session.silence_count >= 8:  # 0.8s silence
+                        # Update per-speaker VAD states
+                        for sid, sdata in session.speakers.items():
+                            if sdata.get("speech_active", False):
+                                sdata["silence_count"] = sdata.get("silence_count", 0) + 1
+                                if sdata["silence_count"] >= 8:  # This speaker stopped
+                                    sdata["speech_active"] = False
+                            else:
+                                sdata["silence_count"] = 0
+                        
+                        if session.silence_count >= 8:  # Global 0.8s silence
                             try:
-                                # 1. Voice fingerprint
+                                # 1. Voice fingerprint for this segment
                                 speaker_id = session.fingerprint_voice(bytes(session.audio_buffer))
                                 
                                 # 2. Transcribe
@@ -193,6 +202,10 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
                             session.audio_buffer.clear()
                             session.speech_active = False
                             session.silence_count = 0
+                            # Reset global speaker tracking
+                            if session.current_speaker_id:
+                                session.speakers[session.current_speaker_id]["speech_active"] = False
+                                session.speakers[session.current_speaker_id]["silence_count"] = 0
             elif frame_type == 0x02:  # Wake word
                 wake_text = payload.decode("utf-8", errors="ignore")
                 logger.info("[%s] Wake word: '%s'", device_id, wake_text)
