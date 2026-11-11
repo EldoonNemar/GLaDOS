@@ -10,6 +10,7 @@ Endpoints:
 import asyncio
 import base64
 import json
+import websockets
 import logging
 import os
 import time
@@ -127,7 +128,10 @@ async def _process_vad_asr_llm_tts(session: GLaDOSConversation, device_id: str, 
         await _synthesize_and_stream(session, device_id, websocket, llm_response)
     except Exception as e:
         logger.error("[%s] Processing error: %s", device_id, e, exc_info=True)
-        await websocket.send_bytes(bytes([0x13]) + f"error:{e}".encode() + b"\x00" * 200)
+        try:
+            await websocket.send_bytes(bytes([0x13]) + f"error:{e}".encode() + b"\x00" * 200)
+        except (Exception,):
+            pass
 
 
 async def _call_llm(session: GLaDOSConversation) -> str:
@@ -157,18 +161,27 @@ async def _synthesize_and_stream(session: GLaDOSConversation, device_id: str, we
             f"{ENGINE_URL}/tts-kokoro",
             json={"text": text, "speed": 1.0},
         )
+        if resp.status_code != 200:
+            logger.warning("[%s] TTS returned %d: %s", device_id, resp.status_code, resp.text[:200])
+            return
         audio_data = resp.json()
         audio_bytes = base64.b64decode(audio_data["audio_base64"])
         sr = audio_data["sample_rate"]
-        # Stream audio in ~200ms chunks (frame type 0x11)
         chunk_size = sr * 0.2 * 2
         for i in range(0, len(audio_bytes), int(chunk_size)):
-            chunk = audio_bytes[i:i + int(chunk_size)]
-            await websocket.send_bytes(bytes([0x11]) + chunk)
+            try:
+                chunk = audio_bytes[i:i + int(chunk_size)]
+                await websocket.send_bytes(bytes([0x11]) + chunk)
+            except (Exception,):  # client disconnected during streaming
+                logger.info("[%s] Client disconnected during TTS playback", device_id)
+                return
         logger.info("[%s] Sent %d bytes of TTS audio (%d Hz)", device_id, len(audio_bytes), sr)
     except Exception as e:
-        logger.error("TTS synthesis failed: %s", e)
-        await websocket.send_bytes(bytes([0x13]) + f"tts error: {e}".encode() + b"\x00" * 200)
+        logger.error("[%s] TTS failed: %s", device_id, e)
+        try:
+            await websocket.send_bytes(bytes([0x13]) + f"tts error: {e}".encode() + b"\x00" * 200)
+        except (Exception,):  # already disconnected
+            pass
 
 
 @app.get("/health")

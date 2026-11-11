@@ -143,7 +143,7 @@ async def main():
     logger.info("GLaDOS Spoke starting...")
     logger.info("Hub URL: %s", HUB_URL)
     logger.info("Device ID: %s", DEVICE_ID)
-    logger.info("Audio device: %s (use AUDIO_DEVICE=<idx> to change)")
+    logger.info("Audio device: %s (use AUDIO_DEVICE=<idx> to change)", AUDIO_DEVICE)
 
     play_task = asyncio.create_task(play_audio())
 
