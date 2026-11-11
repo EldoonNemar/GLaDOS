@@ -5,3 +5,5 @@ numpy
 soundfile
 pydantic
 Kokoro-onnx
+vosk
+vosk

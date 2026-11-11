@@ -162,22 +162,68 @@ class AudioResponse(BaseModel):
 async def health():
     return {"status": "ok", "models": {"vad": vad is not None, "piper_tts": piper_tts is not None, "kokoro_tts": kokoro_tts is not None, "asr": True}}
 
-# ── ASR: RMS-based speech detection ──────────────────────────────
+import os
+import tempfile
+import wave
+
+_vosk_model = None
+
+
+def _get_vosk_model():
+    """Lazy-load Vosk model (downloads tiny model on first use)."""
+    global _vosk_model
+    if _vosk_model is None:
+        try:
+            from vosk import Model, SpkModel
+            model_dir = os.path.join(MODEL_DIR, "vosk-model-small-en-0.15")
+            if not os.path.exists(os.path.join(model_dir, "graph", "phones")):
+                logger.info("Downloading Vosk tiny model (~50MB)...")
+                import urllib.request
+                url = "https://alphacephei.com/vosk/models/vosk-model-small-en-0.15.zip"
+                tmp = os.path.join("/tmp", "vosk-model-small-en-0.15.zip")
+                urllib.request.urlretrieve(url, tmp)
+                import zipfile
+                os.makedirs(model_dir, exist_ok=True)
+                with zipfile.ZipFile(tmp, "r") as z:
+                    z.extractall(model_dir)
+                os.remove(tmp)
+            _vosk_model = Model(model_dir)
+            logger.info("Vosk model loaded")
+        except Exception as e:
+            logger.error("Vosk load failed: %s", e)
+            _vosk_model = "error"
+    return _vosk_model
+
 
 @app.post("/asr", response_model=TranscriptResponse)
 async def transcribe(req: AudioRequest):
-    """Analyze audio for speech activity."""
+    """Transcribe audio using Vosk STT."""
     raw = base64.b64decode(req.audio_base64)
-    audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+    audio = np.frombuffer(raw, dtype=np.int16)
     if len(audio) == 0:
         raise HTTPException(status_code=400, detail="Empty audio")
-    rms = float(np.sqrt(np.mean(audio**2)))
-    peak = float(np.max(np.abs(audio)))
-    zcr = len(np.where(np.diff(np.signbit(audio)))[0]) / len(audio)
-    has_speech = rms > 0.005 and zcr > 0.01 and zcr < 0.5
-    text = "speech detected" if has_speech else "silence"
-    logger.info("ASR: rms=%.4f peak=%.4f zcr=%.4f speech=%s -> %s", rms, peak, zcr, has_speech, text)
-    return TranscriptResponse(text=text, confidence=0.0)
+    try:
+        model = _get_vosk_model()
+        if model == "error":
+            rms = float(np.sqrt(np.mean((audio/32768.0)**2)))
+            return TranscriptResponse(text=f"speech detected (rms={rms:.4f})", confidence=0.0)
+        
+        from vosk import KaldiRecognizer
+        rec = KaldiRecognizer(model, 16000)
+        rec.AcceptWaveform(audio.tobytes())
+        result = rec.Result()
+        text = result.get("text", "").strip()
+        if not text:
+            partial = rec.PartialResult()
+            text = partial.get("text", "").strip()
+        if not text:
+            rms = float(np.sqrt(np.mean((audio/32768.0)**2)))
+            text = "silence" if rms < 0.01 else f"speech detected (rms={rms:.4f})"
+        logger.info("Vosk ASR: '%s'", text)
+        return TranscriptResponse(text=text, confidence=0.0)
+    except Exception as e:
+        logger.error("ASR error: %s", e, exc_info=True)
+        return TranscriptResponse(text=f"asr error: {e}", confidence=0.0)
 
 
 @app.post("/tts", response_model=AudioResponse)
