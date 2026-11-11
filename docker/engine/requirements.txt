@@ -12,3 +12,4 @@ pyannote.audio
 torch
 torchaudio
 pyannote.core
+webrtcvad

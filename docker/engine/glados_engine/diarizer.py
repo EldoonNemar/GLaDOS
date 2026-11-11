@@ -10,24 +10,15 @@ _diarizer = None
 _model = None
 
 def get_diarizer():
-    """Lazy-load diarization model."""
-    global _diarizer, _model
+    """Use WebRTC VAD + voice fingerprinting for speaker separation."""
+    global _diarizer
     if _diarizer is None:
         try:
-            from pyannote.audio import Pipeline
-            model_path = Path("/models") / "pyannote-speaker-diarization"
-            if not model_path.exists():
-                logger.info("Downloading pyannote diarization model...")
-                model_path.mkdir(parents=True, exist_ok=True)
-            
-            _model = Pipeline.from_pretrained(
-                "pyannote/speaker-diarization-3.1"
-            )
-            _model.to("cuda" if torch.cuda.is_available() else "cpu")
+            import webrtcvad
             _diarizer = True
-            logger.info("Pyannote diarization loaded")
-        except Exception as e:
-            logger.error("Diarization load failed: %s", e)
+            logger.info("VAD diarization loaded")
+        except ImportError:
+            logger.warning("webrtcvad not installed, using simple energy VAD")
             _diarizer = False
     return _diarizer is True
 
