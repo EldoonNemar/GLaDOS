@@ -46,9 +46,12 @@ class GLaDOSConversation:
         self.device_id = device_id
         self.conversation_id = str(uuid.uuid4())[:8]
         self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-        self.audio_buffer = bytearray()
+        self.audio_buffer = bytearray()  # Rolling 10s buffer
         self.is_listening = False
         self.last_speech_time = 0.0
+        self.has_speech = False
+        self.speech_start = 0  # offset in buffer where speech started
+        self.silence_count = 0
 
     def add_message(self, role: str, content: str):
         self.messages.append({"role": role, "content": content})
@@ -78,8 +81,30 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
             elif frame_type == 0x01 and session.is_listening:  # Audio chunk
                 session.audio_buffer.extend(payload)
                 session.last_speech_time = time.time()
-                if len(session.audio_buffer) >= 32000:  # ~2s buffer
-                    await _process_vad_asr_llm_tts(session, device_id, websocket)
+                # Keep max 10s buffer for speech detection
+                if len(session.audio_buffer) > 160000:  # 10s at 16kHz
+                    session.audio_buffer = session.audio_buffer[-160000:]
+                
+                # Check VAD on latest 512 samples
+                if len(session.audio_buffer) >= 512:
+                    recent = bytes(session.audio_buffer[-512:])
+                    recent_audio = np.frombuffer(recent, dtype=np.int16).astype(np.float32) / 32768.0
+                    rms = np.sqrt(np.mean(recent_audio**2))
+                    
+                    if rms > 0.02:  # Speech detected
+                        if not session.has_speech:
+                            session.has_speech = True
+                            session.speech_start = max(0, len(session.audio_buffer) - 16000)  # Start 1s before
+                        session.silence_count = 0
+                    else:  # Silence
+                        if session.has_speech:
+                            session.silence_count += 1
+                            if session.silence_count > 30:  # 3+ seconds of silence
+                                # Process speech window
+                                await _process_vad_asr_llm_tts(session, device_id, websocket)
+                                session.has_speech = False
+                                session.silence_count = 0
+                                session.audio_buffer.clear()
             elif frame_type == 0x02:  # Wake word
                 wake_text = payload.decode("utf-8", errors="ignore")
                 logger.info("[%s] Wake word: '%s'", device_id, wake_text)
