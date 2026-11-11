@@ -101,7 +101,7 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
                         session.silence_count = 0
                     elif session.has_speech:
                         session.silence_count += 1
-                        if session.silence_count >= 20:  # 2s silence
+                        if session.silence_count >= 10:  # 1s silence
                             logger.info("[%s] VAD: processing %.1fs", device_id, len(session.audio_buffer)/16000)
                             await _process_vad_asr_llm_tts(session, device_id, websocket)
                             session.has_speech = False
