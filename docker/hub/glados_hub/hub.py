@@ -88,10 +88,13 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
                 if len(session.audio_buffer) > 160000:  # 10s at 16kHz
                     session.audio_buffer = session.audio_buffer[-160000:]
                 
-                # VAD: check energy on last 1600 samples (100ms) every 5 chunks
+                # VAD: check energy on last 1600 samples (100ms)
                 if len(session.audio_buffer) >= 3200:
                     recent = np.frombuffer(bytes(session.audio_buffer[-3200:]), dtype=np.int16).astype(np.float64)
                     rms = np.sqrt(np.mean(recent**2)) / 32768.0
+                    if chunk_count % 10 == 0:
+                        logger.info("[%s] VAD: rms=%.4f buf=%d speech=%d silence=%d",
+                                   device_id, rms, len(session.audio_buffer), session.has_speech, session.silence_count)
                     if rms > 0.01:  # Speech
                         if not session.has_speech:
                             session.has_speech = True
@@ -99,7 +102,7 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
                     elif session.has_speech:
                         session.silence_count += 1
                         if session.silence_count >= 20:  # 2s silence
-                            logger.info("[%s] VAD: processing %.1fs of audio", device_id, len(session.audio_buffer)/16000)
+                            logger.info("[%s] VAD: processing %.1fs", device_id, len(session.audio_buffer)/16000)
                             await _process_vad_asr_llm_tts(session, device_id, websocket)
                             session.has_speech = False
                             session.silence_count = 0
