@@ -105,12 +105,31 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
                         session.silence_count = 0
                     elif session.speech_active:
                         session.silence_count += 1
-                        if session.silence_count >= 10:  # 1s silence = speech ended
-                            logger.info("[%s] Speech ended (%.1fs audio)", device_id, len(session.audio_buffer)/16000)
-                            await _process_vad_asr_llm_tts(session, device_id, websocket)
+                        if session.silence_count >= 8:  # 0.8s silence = speech ended
+                            audio_b64 = base64.b64encode(bytes(session.audio_buffer)).decode()
+                            try:
+                                asr_resp = await http_client.post(
+                                    f"{ENGINE_URL}/asr",
+                                    json={"audio_base64": audio_b64, "sample_rate": 16000},
+                                )
+                                text = asr_resp.json().get("text", "").strip()
+                                session.context_window = (session.context_window + " " + text).strip()
+                                wc = len(session.context_window.split())
+                                if wc > MAX_CONTEXT_WORDS:
+                                    session.context_window = " ".join(session.context_window.split()[-MAX_CONTEXT_WORDS:])
+                                logger.info("[%s] Heard: '%s' (ctx: %d)", device_id, text, wc)
+                                if any(ww in text.lower() for ww in WAKE_WORDS):
+                                    logger.info("[%s] Wake word!", device_id)
+                                    session.add_message("user", text)
+                                    resp = await _call_llm(session)
+                                    session.add_message("assistant", resp)
+                                    await websocket.send_bytes(bytes([0x13]) + b"thinking..." + b"\x00" * 240)
+                                    await _synthesize_and_stream(session, device_id, websocket, resp)
+                            except Exception as e:
+                                logger.error("[%s] ASR error: %s", device_id, e)
+                            session.audio_buffer.clear()
                             session.speech_active = False
                             session.silence_count = 0
-                            session.audio_buffer.clear()
             elif frame_type == 0x02:  # Wake word
                 wake_text = payload.decode("utf-8", errors="ignore")
                 logger.info("[%s] Wake word: '%s'", device_id, wake_text)
