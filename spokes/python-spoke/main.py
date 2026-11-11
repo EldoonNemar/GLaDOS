@@ -43,7 +43,7 @@ async def play_audio():
 async def receive_audio(ws):
     """Receive WebSocket frames and route to queues."""
     while True:
-        data = await ws.recv_bytes()
+        data = await ws.recv()
         frame_type = data[0]
         payload = data[1:]
         if frame_type == 0x11:
@@ -110,7 +110,7 @@ async def main():
                 logger.info("Listening...")
                 while True:
                     await asyncio.sleep(0.1)
-        except (ConnectionRefusedError, OSError, websockets.exceptions.ConnectionClosed) as e:
+        except (ConnectionRefusedError, OSError, websockets.exceptions.ConnectionClosedError) as e:
             logger.error("Lost: %s. Retry %ds", e, retry)
             play_task.cancel()
             for t in [cap, snd, rcv]:
