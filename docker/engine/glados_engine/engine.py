@@ -162,44 +162,23 @@ class AudioResponse(BaseModel):
 async def health():
     return {"status": "ok", "models": {"vad": vad is not None, "piper_tts": piper_tts is not None, "kokoro_tts": kokoro_tts is not None, "asr": True}}
 
-# ── Whisper ASR (faster-whisper) ──────────────────────────────────
-_transcribe_model = None
-
-def _load_asr_model():
-    """Lazy-load Whisper tiny model for transcription."""
-    global _transcribe_model
-    if _transcribe_model is None:
-        try:
-            import whisper
-            logger.info("Loading Whisper ASR model (tiny)...")
-            _transcribe_model = whisper.load_model("tiny")
-            logger.info("Whisper ASR model loaded")
-        except Exception as e:
-            logger.error("Failed to load Whisper ASR: %s", e)
-            _transcribe_model = "error"
-    return _transcribe_model
-
+# ── ASR: RMS-based speech detection ──────────────────────────────
 
 @app.post("/asr", response_model=TranscriptResponse)
 async def transcribe(req: AudioRequest):
-    """Transcribe audio using Whisper ASR."""
+    """Analyze audio for speech activity."""
     raw = base64.b64decode(req.audio_base64)
     audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
     if len(audio) == 0:
         raise HTTPException(status_code=400, detail="Empty audio")
-    try:
-        model = _load_asr_model()
-        if model == "error":
-            return TranscriptResponse(text="[ASR error: model load failed]", confidence=0.0)
-        result = model.transcribe(audio, language="en", task="transcribe")
-        text = result["text"].strip()
-        confidence = 1.0
-        text = " ".join(seg.text for seg in segments).strip()
-        logger.info("Whisper transcribed: '%s'", text)
-        return TranscriptResponse(text=text, confidence=float(info.language_probability))
-    except Exception as e:
-        logger.error("ASR error: %s", e, exc_info=True)
-        return TranscriptResponse(text=f"[ASR error: {e}]", confidence=0.0)
+    rms = float(np.sqrt(np.mean(audio**2)))
+    peak = float(np.max(np.abs(audio)))
+    zcr = len(np.where(np.diff(np.signbit(audio)))[0]) / len(audio)
+    has_speech = rms > 0.005 and zcr > 0.01 and zcr < 0.5
+    text = "speech detected" if has_speech else "silence"
+    logger.info("ASR: rms=%.4f peak=%.4f zcr=%.4f speech=%s -> %s", rms, peak, zcr, has_speech, text)
+    return TranscriptResponse(text=text, confidence=0.0)
+
 
 @app.post("/tts", response_model=AudioResponse)
 async def synthesize_piper(req: TextRequest):
