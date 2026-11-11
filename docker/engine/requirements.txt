@@ -1,12 +1,7 @@
-onnxruntime-rocm
-onnxruntime
+speechrecognition
 fastapi
 uvicorn[standard]
 numpy
 soundfile
 pydantic
-scipy
-librosa
 Kokoro-onnx
-misaki[kokoro,en]
-speechrecognition
