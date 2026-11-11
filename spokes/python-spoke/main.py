@@ -86,15 +86,10 @@ async def send_audio(ws):
 
 async def capture_audio(ws):
     """Capture audio from reSpeaker XVF3800 and stream to hub."""
-    # XVF3800 on Orange Pi is USB audio with 4 mic channels.
-    # We need mono 16kHz. Use ALSA plug to mix 4ch -> 1ch.
-    # Default ALSA device for USB audio is hw:0,0 on Orange Pi.
-    # Also try hw:1,0 and default if those fail.
-    alsa_devices = [
-        "plug:hw:0,0",
-        "plug:hw:1,0",
-        "plug:default",
-    ]
+    # XVF3800 is device [0] on Orange Pi, supports 16kHz natively.
+    # PortAudio needs device index or raw hw: string (no "plug:" prefix).
+    # Try device index first, then hw strings.
+    devices_to_try = [0]  # XVF3800 by index
     
     logger.info("Available audio devices:")
     for idx, dev in enumerate(sd.query_devices()):
@@ -116,20 +111,21 @@ async def capture_audio(ws):
         except queue.Full:
             pass
 
-    for attempt in range(len(alsa_devices)):
-        alsa_device = alsa_devices[attempt]
+    for dev in devices_to_try:
         try:
-            logger.info("Opening audio device %s at %d Hz...", alsa_device, SAMPLE_RATE)
+            logger.info("Opening audio device index %d at %d Hz...", dev, SAMPLE_RATE)
             with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype='int16',
-                                device=alsa_device,
+                                device=dev,
                                 callback=audio_callback, blocksize=CHUNK_SAMPLES):
-                logger.info("Audio capture started on %s at %d Hz", alsa_device, SAMPLE_RATE)
+                dev_info = sd.query_devices()[dev]
+                logger.info("Audio capture started on device %d (%s) at %d Hz", dev,
+                           dev_info["name"], SAMPLE_RATE)
                 while True:
                     await asyncio.sleep(0.1)
         except Exception as e:
-            logger.warning("Device %s failed: %s", alsa_device, e)
+            logger.warning("Device index %d failed: %s", dev, e)
     
-    logger.error("All ALSA devices failed. Spoke cannot capture audio.")
+    logger.error("All devices failed. Spoke cannot capture audio.")
 
 
 async def list_devices():
