@@ -2,11 +2,12 @@ FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 DEBIAN_FRONTEND=noninteractive MODEL_DIR=/models
 
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libsndfile1 && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg libsndfile1 espeak-ng && \
+    rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir \
-    whisper \
-    faster-whisper \
+    speechrecognition \
     fastapi uvicorn[standard] numpy soundfile pydantic scipy librosa Kokoro-onnx misaki[kokoro,en]
 
 WORKDIR /app
