@@ -4,15 +4,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     alsa-utils && \
     rm -rf /var/lib/apt/lists/*
 
-RUN echo 'pcm.!default {
-    type plug
-    slave.pcm "plughw:4,0"
-}
-
-ctl.!default {
-    type hw
-    card 4
-}' > /etc/asound.conf
+COPY spokes/python-spoke/asound.conf /etc/asound.conf
 
 WORKDIR /app
 COPY spokes/python-spoke/main.py ./
