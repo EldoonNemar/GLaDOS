@@ -89,7 +89,7 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
                     session.audio_buffer = session.audio_buffer[-160000:]
                 
                 # Process every 8s of audio
-                if len(session.audio_buffer) >= 320000:  # 8s at 16kHz
+                if len(session.audio_buffer) >= 320000:  # 20s at 16kHz
                     await _process_vad_asr_llm_tts(session, device_id, websocket)
             elif frame_type == 0x02:  # Wake word
                 wake_text = payload.decode("utf-8", errors="ignore")
