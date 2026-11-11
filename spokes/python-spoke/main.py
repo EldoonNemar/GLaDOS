@@ -46,6 +46,7 @@ async def play_audio():
         frame_type, chunk = await audio_queue.get()
         if frame_type == 0x11:
             buffer.extend(chunk)
+            logger.debug("[PLAYBACK] Received %d bytes TTS audio", len(chunk))
             while len(buffer) >= PLAYBACK_SR * 0.2 * 2:
                 play_chunk = bytes(buffer[:int(PLAYBACK_SR * 0.2 * 2)])
                 audio_arr = np.frombuffer(play_chunk, dtype=np.int16)
