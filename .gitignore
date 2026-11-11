@@ -1,6 +1,12 @@
 # LLM model — large, downloaded via script
 models/gemma-4-E4B-it-Q4_K_M.gguf
 
+# All other models — too large for git, provided as downloads
+models/ASR/*
+models/TTS/*
+!models/ASR/*.yaml
+!models/download-gemma4.sh
+
 # Docker build artifacts
 __pycache__/
 *.pyc
