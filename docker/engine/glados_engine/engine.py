@@ -23,14 +23,14 @@ from kokoro_onnx import Kokoro as KokoroTTS
 from pydantic import BaseModel
 
 MODEL_DIR = Path(os.environ.get("MODEL_DIR", "/models"))
-ASR_ENCODER = os.path.join(MODEL_DIR, os.environ.get("ASR_ENCODER", "models/ASR/parakeet-tdt-0.6b-v3_encoder.onnx"))
-ASR_DECODER = os.path.join(MODEL_DIR, os.environ.get("ASR_DECODER", "models/ASR/parakeet-tdt-0.6b-v3_decoder.onnx"))
-ASR_JOINER  = os.path.join(MODEL_DIR, os.environ.get("ASR_JOINER", "models/ASR/parakeet-tdt-0.6b-v3_joiner.onnx"))
-VAD_MODEL   = os.path.join(MODEL_DIR, os.environ.get("VAD_MODEL", "models/ASR/silero_vad_16k_op15.onnx"))
-TTS_MODEL   = os.path.join(MODEL_DIR, os.environ.get("TTS_MODEL", "models/TTS/glados.onnx"))
-TTS_CONFIG  = os.path.join(MODEL_DIR, os.environ.get("TTS_CONFIG", "models/TTS/glados.json"))
-TTS_KOKORO  = os.path.join(MODEL_DIR, os.environ.get("TTS_KOKORO", "models/TTS/kokoro-v1.0.fp16.onnx"))
-TTS_VOICES  = os.path.join(MODEL_DIR, os.environ.get("TTS_VOICES", "models/TTS/kokoro-voices-v1.0.bin"))
+ASR_ENCODER = os.path.join(MODEL_DIR, os.environ.get("ASR_ENCODER", "/models/ASR/parakeet-tdt-0.6b-v3_encoder.onnx"))
+ASR_DECODER = os.path.join(MODEL_DIR, os.environ.get("ASR_DECODER", "/models/ASR/parakeet-tdt-0.6b-v3_decoder.onnx"))
+ASR_JOINER  = os.path.join(MODEL_DIR, os.environ.get("ASR_JOINER", "/models/ASR/parakeet-tdt-0.6b-v3_joiner.onnx"))
+VAD_MODEL   = os.path.join(MODEL_DIR, os.environ.get("VAD_MODEL", "/models/ASR/silero_vad_16k_op15.onnx"))
+TTS_MODEL   = os.path.join(MODEL_DIR, os.environ.get("TTS_MODEL", "/models/TTS/glados.onnx"))
+TTS_CONFIG  = os.path.join(MODEL_DIR, os.environ.get("TTS_CONFIG", "/models/TTS/glados.json"))
+TTS_KOKORO  = os.path.join(MODEL_DIR, os.environ.get("TTS_KOKORO", "/models/TTS/kokoro-v1.0.fp16.onnx"))
+TTS_VOICES  = os.path.join(MODEL_DIR, os.environ.get("TTS_VOICES", "/models/TTS/kokoro-voices-v1.0.bin"))
 
 logger = logging.getLogger("glados_engine")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
