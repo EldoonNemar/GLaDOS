@@ -96,8 +96,6 @@ services:
     environment:
       - GLADOS_HUB_URL=ws://localhost:5051
       - GLADOS_DEVICE_ID=python-spoke-001
-    depends_on:
-      - glados_hub
 
 networks:
   glados:
