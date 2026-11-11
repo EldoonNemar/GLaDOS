@@ -1,0 +1,112 @@
+# GLaDOS — orchestrates frontend speakers on your ROCm server
+#
+# Usage:
+#   docker compose up -d              # Start backend only
+#   docker compose --profile spoke up -d  # Also build/start the Python spoke
+
+services:
+  # ── LLM: llama.cpp server (Gemma 4 E4B) ──────────────────────────
+  glados_llama:
+    image: ghcr.io/ggml-org/llama.cpp:server-rocm
+    container_name: glados_llama
+    restart: unless-stopped
+    devices:
+      - "/dev/kfd:/dev/kfd"
+      - "/dev/dri:/dev/dri"
+    group_add:
+      - video
+      - render
+    ports:
+      - "18080:8080"
+    volumes:
+      - ./models:/models
+    environment:
+      - HIP_VISIBLE_DEVICES=0,1
+      - GGML_CUDA_P2P=1
+    command:
+      - "-m"
+      - "/models/gemma-4-E4B-it-Q4_K_M.gguf"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8080"
+      - "-c"
+      - "65536"
+      - "--parallel"
+      - "2"
+      - "-ngl"
+      - "99"
+    networks:
+      glados:
+      jigowatts_default:
+
+  # ── ASR + TTS Engine ──────────────────────────────────────────────
+  glados_engine:
+    build:
+      context: .
+      dockerfile: docker/engine/Dockerfile
+    container_name: glados_engine
+    restart: unless-stopped
+    devices:
+      - "/dev/kfd:/dev/kfd"
+      - "/dev/dri:/dev/dri"
+    group_add:
+      - video
+      - render
+    ports:
+      - "5052:8081"
+    volumes:
+      - ./models:/models
+    environment:
+      - HIP_VISIBLE_DEVICES=0
+      - MODEL_DIR=/models
+    networks:
+      - glados
+
+  # ── WebSocket Hub / Orchestrator ──────────────────────────────────
+  glados_hub:
+    build:
+      context: .
+      dockerfile: docker/hub/Dockerfile
+    container_name: glados_hub
+    restart: unless-stopped
+    ports:
+      - "5050:5050"
+      - "5051:5051"
+    volumes:
+      - ./models:/models:ro
+    environment:
+      - HUB_PORT=5051
+      - REST_PORT=5050
+      - LLAMA_URL=http://glados_llama:8080
+      - ENGINE_URL=http://glados_engine:8081
+      - WAKE_WORD=glados
+    depends_on:
+      - glados_llama
+      - glados_engine
+    networks:
+      glados:
+      jigowatts_default:
+
+  # ── Python Spoke (optional -- laptop/RPi) ─────────────────────────
+  glados_spoke:
+    profiles: ["spoke"]
+    build:
+      context: .
+      dockerfile: spokes/python-spoke/Dockerfile
+    container_name: glados_spoke
+    restart: unless-stopped
+    network_mode: host
+    devices:
+      - "/dev/snd:/dev/snd"
+    environment:
+      - GLADOS_HUB_URL=ws://localhost:5051
+      - GLADOS_DEVICE_ID=python-spoke-001
+    depends_on:
+      - glados_hub
+
+networks:
+  glados:
+    driver: bridge
+  jigowatts_default:
+    external: true

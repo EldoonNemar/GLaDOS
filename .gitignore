@@ -1,0 +1,23 @@
+# LLM model — large, downloaded via script
+models/gemma-4-E4B-it-Q4_K_M.gguf
+
+# Docker build artifacts
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Local config
+spokes/esp32-spoke/sdkconfig
+spokes/esp32-spoke/sdkconfig.old

@@ -1,0 +1,25 @@
+menu "GLaDOS Spoke Configuration"
+    config WIFI_SSID
+        string "WiFi SSID"
+        default "your_wifi_ssid"
+        help
+            The SSID of your WiFi network
+
+    config WIFI_PASSWORD
+        string "WiFi Password"
+        default "your_wifi_password"
+        help
+            The password of your WiFi network
+
+    config HUB_HOST
+        string "Hub Host"
+        default "192.168.1.100"
+        help
+            The IP address or hostname of the GLaDOS hub
+
+    config HUB_PORT
+        int "Hub Port"
+        default 5051
+        help
+            The WebSocket port of the GLaDOS hub
+endmenu
