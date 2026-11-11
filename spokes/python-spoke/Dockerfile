@@ -1,13 +1,12 @@
 FROM python:3.12-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    alsa-utils && \
+    alsa-utils alsa-topology-conf alsa-ucm-conf && \
     rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir numpy websockets
 
-COPY spokes/python-spoke/asound.conf /etc/asound.conf
+COPY spokes/python-spoke/setup_audio.py /app/setup_audio.py
+COPY spokes/python-spoke/main.py /app/main.py
 
-WORKDIR /app
-COPY spokes/python-spoke/main.py ./
-CMD ["python", "main.py"]
+CMD ["python", "-u", "/app/setup_audio.py"]

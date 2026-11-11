@@ -31,7 +31,7 @@ async def play_audio():
                         try: playback_proc.wait(timeout=1)
                         except: pass
                     playback_proc = await asyncio.create_subprocess_exec(
-                        "aplay", "-f", "S16_LE", "-r", "16000", "-D", "plughw:4,0",
+                        "aplay", "-f", "S16_LE", "-r", "16000", "-D", "plughw:CARD=Array,DEV=0",
                         stdin=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
                     )
                     playback_proc.stdin.write(out)
@@ -54,7 +54,7 @@ async def receive_audio(ws):
 async def capture_audio(ws):
     """Capture audio using arecord."""
     proc = await asyncio.create_subprocess_exec(
-        "arecord", "-f", "S16_LE", "-r", "16000", "-c", "1", "-t", "raw", "-D", "plughw:4,0",
+        "arecord", "-f", "S16_LE", "-r", "16000", "-c", "1", "-t", "raw", "-D", "plughw:CARD=Array,DEV=0",
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
     )
     logger.info("arecord started: %d", proc.pid)
