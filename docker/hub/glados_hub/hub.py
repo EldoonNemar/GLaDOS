@@ -51,7 +51,7 @@ class GLaDOSConversation:
         self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         self.audio_buffer = bytearray()  # Rolling 10s buffer
         self.speech_active = False
-        self.silence_frames = 0
+        self.silence_count = 0
         self.is_listening = False
         self.last_speech_time = 0.0
         self.context_window = ""
@@ -102,14 +102,14 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
                     if rms > 0.015:  # Speech
                         if not session.speech_active:
                             session.speech_active = True
-                        session.silence_frames = 0
+                        session.silence_count = 0
                     elif session.speech_active:
-                        session.silence_frames += 1
-                        if session.silence_frames >= 10:  # 1s silence = speech ended
+                        session.silence_count += 1
+                        if session.silence_count >= 10:  # 1s silence = speech ended
                             logger.info("[%s] Speech ended (%.1fs audio)", device_id, len(session.audio_buffer)/16000)
                             await _process_vad_asr_llm_tts(session, device_id, websocket)
                             session.speech_active = False
-                            session.silence_frames = 0
+                            session.silence_count = 0
                             session.audio_buffer.clear()
             elif frame_type == 0x02:  # Wake word
                 wake_text = payload.decode("utf-8", errors="ignore")
