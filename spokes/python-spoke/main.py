@@ -29,7 +29,7 @@ SAMPLE_RATE = 16000
 CHUNK_SAMPLES = 1600  # 100ms
 
 # Audio playback
-PLAYBACK_SR = 48000
+PLAYBACK_SR = 16000
 TTS_SR = 24000
 audio_queue = asyncio.Queue()
 audio_tx_queue = queue.Queue()
@@ -53,7 +53,7 @@ async def play_audio():
                 frame_data = bytes(buffer[:int(TTS_SR * 0.1 * 2)])
                 audio = np.frombuffer(frame_data, dtype=np.int16).astype(np.float32)
                 # Resample from 24000 -> 48000 (simple interpolation)
-                n_new = int(len(audio) * PLAYBACK_SR / TTS_SR)
+                n_new = int(len(audio) * 16000 / 24000)
                 indices = np.linspace(0, len(audio) - 1, n_new)
                 resampled = np.interp(indices, np.arange(len(audio)), audio)
                 # Play at 48000Hz
