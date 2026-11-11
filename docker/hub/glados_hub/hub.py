@@ -106,15 +106,11 @@ async def _process_vad_asr_llm_tts(session: GLaDOSConversation, device_id: str, 
         # Call ASR engine for transcription
         try:
             asr_resp = await http_client.post(
-                f"{ENGINE_URL}/asr-debug",
+                f"{ENGINE_URL}/asr",
                 json={"audio_base64": audio_b64, "sample_rate": 16000},
             )
-            debug = asr_resp.json()
-            logger.info("[%s] ASR debug: samples=%d rms=%.6f peak=%.6f min=%d max=%d mean=%.2f", 
-                       device_id, debug.get("samples",0), debug.get("rms",0), 
-                       debug.get("peak",0), debug.get("min",0), debug.get("max",0), debug.get("mean",0))
-            if debug.get("first_10"):
-                logger.info("[%s] First 10 samples: %s", device_id, debug["first_10"])
+            asr_result = asr_resp.json()
+            user_text = asr_result.get("text", "").strip()
             if user_text.startswith("["):
                 user_text = f"[ASR unavailable — {user_text}]"
             else:
