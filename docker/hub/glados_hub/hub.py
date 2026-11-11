@@ -45,23 +45,71 @@ http_client = httpx.AsyncClient(timeout=120.0)
 
 
 class GLaDOSConversation:
+    MAX_WORDS = 300
+    
     def __init__(self, device_id: str):
         self.device_id = device_id
         self.conversation_id = str(uuid.uuid4())[:8]
         self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-        self.audio_buffer = bytearray()  # Rolling 10s buffer
-        self.speech_active = False
-        self.silence_count = 0
+        self.audio_buffer = bytearray()
         self.is_listening = False
         self.last_speech_time = 0.0
-        self.context_window = ""
-        self.silence_count = 0
-        self.last_transcript = ""
-        self.speech_start = 0  # offset in buffer where speech started
-        self.silence_count = 0
+        # Speaker tracking: voice_id -> {"context": str, "last_heard": float}
+        self.speakers: dict = {}
+        self.current_speaker_id: str = None
+        self.silence_count: int = 0
+        self.speech_active: bool = False
+        self.interrupting: bool = False
+        # Shared conversation memory
+        self.conversation_history: list = []  # ["speaker1: text", "speaker2: text", ...]
+    
+    def fingerprint_voice(self, audio_bytes: bytes) -> str:
+        """Simple voice fingerprint from audio characteristics."""
+        try:
+            import struct
+            samples = np.frombuffer(audio_bytes[-8000:], dtype=np.int16).astype(np.float32)[:4000]
+            if len(samples) < 100:
+                return "unknown"
+            # Features: pitch (zero-crossing rate), spectral centroid, energy
+            zcr = np.mean(np.abs(np.diff(np.sign(samples))))
+            energy = np.sqrt(np.mean(samples**2))
+            # Simple hash-based fingerprint
+            fp = f"v{zcr:.2f}_{energy:.1f}"
+            # Match to known speakers (fuzzy)
+            for sid in self.speakers:
+                sf = sid.split('_')
+                if len(sf) >= 2:
+                    sz, se = float(sf[1]), float(sf[2])
+                    if abs(zcr - sz) < 0.05 and abs(energy - se) < 0.5:
+                        return sid
+            # New speaker
+            new_id = f"speaker_{zcr:.2f}_{energy:.1f}_{time.time():.0f}"
+            self.speakers[new_id] = {"context": "", "last_heard": time.time()}
+            logger.info("[glados] New speaker: %s", new_id)
+            return new_id
+        except Exception as e:
+            logger.warning("Voice fingerprint failed: %s", e)
+            return "unknown"
+    
+    def add_speech_to_context(self, speaker_id: str, text: str):
+        """Add transcribed text to speaker's context."""
+        if speaker_id and text.strip():
+            # Add to speaker's personal context
+            if speaker_id in self.speakers:
+                self.speakers[speaker_id]["context"] += " " + text.strip()
+                # Keep personal context reasonable
+                words = self.speakers[speaker_id]["context"].split()
+                if len(words) > 150:
+                    self.speakers[speaker_id]["context"] = " ".join(words[-150:])
+            
+            # Add to conversation history
+            self.conversation_history.append(f"{speaker_id}: {text.strip()}")
+            # Keep history manageable
+            if len(self.conversation_history) > 50:
+                self.conversation_history = self.conversation_history[-50:]
+            
+            self.speakers[speaker_id]["last_heard"] = time.time()
 
-    def add_message(self, role: str, content: str):
-        self.messages.append({"role": role, "content": content})
 
 
 @app.websocket("/ws/{device_id}")
@@ -105,28 +153,40 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
                         session.silence_count = 0
                     elif session.speech_active:
                         session.silence_count += 1
-                        if session.silence_count >= 8:  # 0.8s silence = speech ended
-                            audio_b64 = base64.b64encode(bytes(session.audio_buffer)).decode()
+                        if session.silence_count >= 8:  # 0.8s silence
                             try:
+                                # 1. Voice fingerprint
+                                speaker_id = session.fingerprint_voice(bytes(session.audio_buffer))
+                                
+                                # 2. Transcribe
+                                audio_b64 = base64.b64encode(bytes(session.audio_buffer)).decode()
                                 asr_resp = await http_client.post(
                                     f"{ENGINE_URL}/asr",
                                     json={"audio_base64": audio_b64, "sample_rate": 16000},
                                 )
                                 text = asr_resp.json().get("text", "").strip()
-                                session.context_window = (session.context_window + " " + text).strip()
-                                wc = len(session.context_window.split())
-                                if wc > MAX_CONTEXT_WORDS:
-                                    session.context_window = " ".join(session.context_window.split()[-MAX_CONTEXT_WORDS:])
-                                logger.info("[%s] Heard: '%s' (ctx: %d)", device_id, text, wc)
-                                if any(ww in text.lower() for ww in WAKE_WORDS):
-                                    logger.info("[%s] Wake word!", device_id)
-                                    session.add_message("user", text)
-                                    resp = await _call_llm(session)
-                                    session.add_message("assistant", resp)
-                                    await websocket.send_bytes(bytes([0x13]) + b"thinking..." + b"\x00" * 240)
-                                    await _synthesize_and_stream(session, device_id, websocket, resp)
+                                
+                                # 3. Add to speaker context + conversation history
+                                session.add_speech_to_context(speaker_id, text)
+                                logger.info("[%s] '%s' (speaker: %s, conv: %d entries)", 
+                                           device_id, text, speaker_id, len(session.conversation_history))
+                                
+                                # 4. Decide if GLaDOS should respond
+                                if session.interrupting:
+                                    logger.info("[%s] GLaDOS already responding, skip", device_id)
+                                else:
+                                    should_respond = await _should_glados_respond(session, text)
+                                    if should_respond:
+                                        session.interrupting = True
+                                        logger.info("[%s] GLaDOS chimes in!", device_id)
+                                        session.add_message("user", text)
+                                        resp = await _call_llm(session)
+                                        session.add_message("assistant", resp)
+                                        await websocket.send_bytes(bytes([0x13]) + b"thinking..." + b"\x00" * 240)
+                                        await _synthesize_and_stream(session, device_id, websocket, resp)
+                                        session.interrupting = False
                             except Exception as e:
-                                logger.error("[%s] ASR error: %s", device_id, e)
+                                logger.error("[%s] Processing error: %s", device_id, e)
                             session.audio_buffer.clear()
                             session.speech_active = False
                             session.silence_count = 0
@@ -232,6 +292,41 @@ async def _synthesize_and_stream(session: GLaDOSConversation, device_id: str, we
             await websocket.send_bytes(bytes([0x13]) + f"tts error: {e}".encode() + b"\x00" * 200)
         except (Exception,):  # already disconnected
             pass
+
+
+
+async def _should_glados_respond(session: GLaDOSConversation, latest_text: str) -> bool:
+    """Use LLM to decide if GLaDOS should chime in naturally."""
+    try:
+        # Build context summary
+        recent = session.conversation_history[-10:]  # Last 10 speech segments
+        context_str = "; ".join(recent)
+        
+        prompt = f"""You are GLaDOS. Respond YES or NO only.
+Should GLaDOS interrupt to answer/comment? Consider:
+- Is there a question being asked?
+- Does GLaDOS know the answer from context?
+- Is it natural to chime in?
+
+Recent conversation: {context_str}
+Latest speech: '{latest_text}'
+
+Answer: """
+        
+        resp = await http_client.post(
+            f"{LLAMA_URL}/v1/chat/completions",
+            json={
+                "model": "default",
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 4,
+                "temperature": 0.1,
+            },
+        )
+        result = resp.json()["choices"][0]["message"]["content"].strip().upper()
+        return "YES" in result
+    except Exception as e:
+        logger.warning("Intent check failed: %s", e)
+        return False
 
 
 @app.get("/health")
