@@ -6,11 +6,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg && \
     rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir \
-    vosk \
-    fastapi uvicorn[standard] \
-    numpy soundfile pydantic \
-    kokoro-onnx
+COPY docker/engine/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 WORKDIR /app
 COPY docker/engine/glados_engine/ ./
