@@ -29,7 +29,8 @@ SAMPLE_RATE = 16000
 CHUNK_SAMPLES = 1600  # 100ms
 
 # Audio playback
-PLAYBACK_SR = 22050
+PLAYBACK_SR = 48000
+TTS_SR = 24000
 audio_queue = asyncio.Queue()
 audio_tx_queue = queue.Queue()
 
@@ -47,7 +48,18 @@ async def play_audio():
         if frame_type == 0x11:
             buffer.extend(chunk)
             logger.debug("[PLAYBACK] Received %d bytes TTS audio", len(chunk))
-            while len(buffer) >= PLAYBACK_SR * 0.2 * 2:
+            while len(buffer) >= TTS_SR * 0.1 * 2:
+                # Extract 100ms of TTS audio
+                frame_data = bytes(buffer[:int(TTS_SR * 0.1 * 2)])
+                audio = np.frombuffer(frame_data, dtype=np.int16).astype(np.float32)
+                # Resample from 24000 -> 48000 (simple interpolation)
+                n_new = int(len(audio) * PLAYBACK_SR / TTS_SR)
+                indices = np.linspace(0, len(audio) - 1, n_new)
+                resampled = np.interp(indices, np.arange(len(audio)), audio)
+                # Play at 48000Hz
+                sd.play((resampled * 32767).astype(np.int16), PLAYBACK_SR)
+                sd.wait()
+                buffer = buffer[int(TTS_SR * 0.1 * 2):]
                 play_chunk = bytes(buffer[:int(PLAYBACK_SR * 0.2 * 2)])
                 audio_arr = np.frombuffer(play_chunk, dtype=np.int16)
                 sd.play(audio_arr, PLAYBACK_SR)
