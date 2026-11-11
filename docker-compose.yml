@@ -13,9 +13,6 @@ services:
     devices:
       - "/dev/kfd:/dev/kfd"
       - "/dev/dri:/dev/dri"
-    group_add:
-      - video
-      - render
     ports:
       - "18080:8080"
     volumes:
@@ -50,9 +47,6 @@ services:
     devices:
       - "/dev/kfd:/dev/kfd"
       - "/dev/dri:/dev/dri"
-    group_add:
-      - video
-      - render
     ports:
       - "5052:8081"
     volumes:
