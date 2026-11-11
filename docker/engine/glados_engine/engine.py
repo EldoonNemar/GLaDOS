@@ -20,6 +20,7 @@ from typing import Optional
 import numpy as np
 from fastapi import FastAPI, HTTPException
 from kokoro_onnx import Kokoro as KokoroTTS
+from diarizer import diarize
 from pydantic import BaseModel
 
 MODEL_DIR = Path(os.environ.get("MODEL_DIR", "/models"))
@@ -156,6 +157,14 @@ class TranscriptResponse(BaseModel):
 class AudioResponse(BaseModel):
     audio_base64: str
     sample_rate: int
+
+
+@app.post("/diarize")
+async def diarize_audio(req: AudioRequest):
+    """Diarize audio into speaker segments."""
+    raw = base64.b64decode(req.audio_base64)
+    segments = diarize(raw, req.sample_rate)
+    return {"segments": [{"speaker": s["speaker"], "start": s["start"], "end": s["end"]} for s in segments]}
 
 
 @app.get("/health")
