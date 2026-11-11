@@ -1,19 +1,5 @@
-"""
-GLaDOS Python Spoke - connects a reSpeaker XVF3800 to the GLaDOS hub.
-Connects to ws://hub:5051/ws/{device_id}
-"""
-
-import asyncio
-import base64
-import json
-import logging
-import os
-import queue
-import signal
-import subprocess
-import sys
+import asyncio, base64, json, logging, os, queue, signal, subprocess, sys
 from pathlib import Path
-
 import numpy as np
 import websockets
 
@@ -23,18 +9,14 @@ logger = logging.getLogger("glados_spoke")
 HUB_URL = os.environ.get("GLADOS_HUB_URL", "ws://localhost:5051")
 DEVICE_ID = os.environ.get("GLADOS_DEVICE_ID", "spoke-001")
 SAMPLE_RATE = 16000
-CHUNK_SAMPLES = 1600  # 100ms
-
+CHUNK_SAMPLES = 1600
 PLAYBACK_SR = 16000
 TTS_SR = 24000
-
 audio_queue = asyncio.Queue()
 audio_tx_queue = queue.Queue()
 chunk_count = 0
-
 capture_proc = None
 playback_proc = None
-
 
 async def play_audio():
     global playback_proc
@@ -56,9 +38,9 @@ async def play_audio():
                     if playback_proc:
                         try: playback_proc.wait(timeout=1)
                         except: pass
-                    playback_proc = subprocess.Popen(
-                        ["aplay", "-f", "S16_LE", "-r", "16000", "-D", "plughw:4,0"],
-                        stdin=subprocess.PIPE, stderr=subprocess.DEVNULL
+                    playback_proc = await asyncio.create_subprocess_exec(
+                        "aplay", "-f", "S16_LE", "-r", "16000", "-D", "plughw:4,0",
+                        stdin=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
                     )
                     playback_proc.stdin.write(resampled)
             buffer = buffer[int(TTS_SR * 0.2 * 2):]
@@ -66,20 +48,18 @@ async def play_audio():
             text = chunk.rstrip(b'\x00').decode('utf-8', errors='ignore')
             logger.info("[STATUS] %s", text)
 
-
 async def capture_audio(ws):
     global capture_proc
-    capture_proc = subprocess.Popen(
-        ["arecord", "-f", "S16_LE", "-r", "16000", "-c", "1", "-t", "raw", "-D", "plughw:4,0"],
-        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+    capture_proc = await asyncio.create_subprocess_exec(
+        "arecord", "-f", "S16_LE", "-r", "16000", "-c", "1", "-t", "raw", "-D", "plughw:4,0",
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
     )
     logger.info("arecord started")
     cs = CHUNK_SAMPLES * 2
     try:
         while True:
-            data = capture_proc.stdout.read(cs)
+            data = await asyncio.wait_for(capture_proc.stdout.read(cs), timeout=1.0)
             if len(data) < cs:
-                await asyncio.sleep(0.01)
                 continue
             rms = np.sqrt(np.mean(np.frombuffer(data, dtype=np.int16).astype(np.float64)**2))
             chunk_count += 1
@@ -93,14 +73,12 @@ async def capture_audio(ws):
         pass
     finally:
         capture_proc.terminate()
-        capture_proc.wait()
-
+        await capture_proc.wait()
 
 async def send_audio(ws):
     while True:
         frame = await asyncio.get_event_loop().run_in_executor(None, audio_tx_queue.get)
         await ws.send(frame)
-
 
 async def main():
     logger.info("GLaDOS Spoke starting... Hub=%s Device=%s", HUB_URL, DEVICE_ID)
