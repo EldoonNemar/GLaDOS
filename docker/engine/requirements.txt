@@ -9,4 +9,4 @@ scipy
 librosa
 Kokoro-onnx
 misaki[kokoro,en]
-faster-whisper
+whisper

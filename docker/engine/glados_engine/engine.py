@@ -170,9 +170,9 @@ def _load_asr_model():
     global _transcribe_model
     if _transcribe_model is None:
         try:
-            from faster_whisper import WhisperModel
+            import whisper
             logger.info("Loading Whisper ASR model (tiny)...")
-            _transcribe_model = WhisperModel("tiny", device="cpu", compute_type="int8")
+            _transcribe_model = whisper.load_model("tiny")
             logger.info("Whisper ASR model loaded")
         except Exception as e:
             logger.error("Failed to load Whisper ASR: %s", e)
@@ -191,7 +191,9 @@ async def transcribe(req: AudioRequest):
         model = _load_asr_model()
         if model == "error":
             return TranscriptResponse(text="[ASR error: model load failed]", confidence=0.0)
-        segments, info = model.transcribe(audio, language="en")
+        result = model.transcribe(audio, language="en", task="transcribe")
+        text = result["text"].strip()
+        confidence = 1.0
         text = " ".join(seg.text for seg in segments).strip()
         logger.info("Whisper transcribed: '%s'", text)
         return TranscriptResponse(text=text, confidence=float(info.language_probability))
