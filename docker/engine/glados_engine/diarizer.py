@@ -21,10 +21,9 @@ def get_diarizer():
                 model_path.mkdir(parents=True, exist_ok=True)
             
             _model = Pipeline.from_pretrained(
-                "pyannote/speaker-diarization-3.1",
-                use_auth_token=None  # Set if you have HF token
+                "pyannote/speaker-diarization-3.1"
             )
-            _model.cuda() if torch.cuda.is_available() else _model
+            _model.to("cuda" if torch.cuda.is_available() else "cpu")
             _diarizer = True
             logger.info("Pyannote diarization loaded")
         except Exception as e:
