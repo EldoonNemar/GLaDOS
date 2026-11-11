@@ -84,7 +84,7 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
                 logger.info("[%s] Wake word: '%s'", device_id, wake_text)
                 session.is_listening = True
                 session.audio_buffer.clear()
-                await websocket.send_bytes(bytes([0x13] + b"listening..." + b"\x00" * 240))
+                await websocket.send_bytes(bytes([0x13]) + b"listening..." + b"\x00" * 240)
     except WebSocketDisconnect:
         logger.info("Client disconnected: %s", device_id)
         active_sessions.pop(device_id, None)
@@ -100,7 +100,7 @@ async def _process_vad_asr_llm_tts(session: GLaDOSConversation, device_id: str, 
         session.audio_buffer.clear()
 
         # Send "thinking" status
-        await websocket.send_bytes(bytes([0x13] + b"thinking..." + b"\x00" * 240))
+        await websocket.send_bytes(bytes([0x13]) + b"thinking..." + b"\x00" * 240)
 
         # TODO: Send audio_b64 to ENGINE_URL/asr for transcription
         user_text = f"[audio: {len(audio_b64)} chars]"
@@ -113,7 +113,7 @@ async def _process_vad_asr_llm_tts(session: GLaDOSConversation, device_id: str, 
         await _synthesize_and_stream(session, device_id, websocket, llm_response)
     except Exception as e:
         logger.error("[%s] Processing error: %s", device_id, e, exc_info=True)
-        await websocket.send_bytes(bytes([0x13] + f"error:{e}".encode() + b"\x00" * 200))
+        await websocket.send_bytes(bytes([0x13]) + f"error:{e}".encode() + b"\x00" * 200)
 
 
 async def _call_llm(session: GLaDOSConversation) -> str:
@@ -154,7 +154,7 @@ async def _synthesize_and_stream(session: GLaDOSConversation, device_id: str, we
         logger.info("[%s] Sent %d bytes of TTS audio (%d Hz)", device_id, len(audio_bytes), sr)
     except Exception as e:
         logger.error("TTS synthesis failed: %s", e)
-        await websocket.send_bytes(bytes([0x13] + f"tts error: {e}".encode() + b"\x00" * 200))
+        await websocket.send_bytes(bytes([0x13]) + f"tts error: {e}".encode() + b"\x00" * 200)
 
 
 @app.get("/health")
