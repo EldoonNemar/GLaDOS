@@ -1,5 +1,4 @@
-import asyncio, base64, json, logging, os, queue, signal, subprocess, sys
-from pathlib import Path
+import asyncio, logging, os, queue
 import numpy as np
 import websockets
 
@@ -8,26 +7,24 @@ logger = logging.getLogger("glados_spoke")
 
 HUB_URL = os.environ.get("GLADOS_HUB_URL", "ws://localhost:5051")
 DEVICE_ID = os.environ.get("GLADOS_DEVICE_ID", "spoke-001")
-SAMPLE_RATE = 16000
-CHUNK_SAMPLES = 1600
-PLAYBACK_SR = 16000
-TTS_SR = 24000
-audio_queue = asyncio.Queue()
-audio_tx_queue = queue.Queue()
-chunk_count = 0
-capture_proc = None
-playback_proc = None
+CHUNK_SIZE = 1600 * 2  # 1600 samples * 2 bytes
+
+def mix_stereo_to_mono(data):
+    """Mix 2-channel stereo int16 to mono."""
+    arr = np.frombuffer(data, dtype=np.int16).reshape(-1, 2)
+    mono = (arr[:, 0].astype(np.float32) + arr[:, 1].astype(np.float32)) / 2
+    return mono.astype(np.int16).tobytes()
 
 async def play_audio():
-    global playback_proc
+    """Play TTS audio from queue using aplay."""
     buffer = bytearray()
     while True:
         frame_type, chunk = await audio_queue.get()
         if frame_type == 0x11:
             buffer.extend(chunk)
-            logger.info("[PLAYBACK] Got %d bytes (buf: %d)", len(chunk), len(buffer))
-            while len(buffer) >= TTS_SR * 0.2 * 2:
-                data = bytes(buffer[:int(TTS_SR * 0.2 * 2)])
+            logger.info("[PLAYBACK] Got %d bytes (total: %d)", len(chunk), len(buffer))
+            while len(buffer) >= TTS_CHUNK:
+                data = bytes(buffer[:TTS_CHUNK])
                 audio = np.frombuffer(data, dtype=np.int16).astype(np.float32)
                 n_new = int(len(audio) * 16000 / 24000)
                 idx = np.linspace(0, len(audio) - 1, n_new)
@@ -43,42 +40,59 @@ async def play_audio():
                         stdin=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
                     )
                     playback_proc.stdin.write(resampled)
-            buffer = buffer[int(TTS_SR * 0.2 * 2):]
+            buffer = buffer[TTS_CHUNK:]
         elif frame_type == 0x13:
-            text = chunk.rstrip(b'\x00').decode('utf-8', errors='ignore')
-            logger.info("[STATUS] %s", text)
+            logger.info("[STATUS] %s", chunk.rstrip(b'\x00').decode('utf-8', errors='ignore'))
 
 async def capture_audio(ws):
-    global capture_proc
-    capture_proc = await asyncio.create_subprocess_exec(
+    """Capture audio using arecord with proper async handling."""
+    proc = await asyncio.create_subprocess_exec(
         "arecord", "-f", "S16_LE", "-r", "16000", "-c", "1", "-t", "raw", "-D", "plughw:4,0",
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
     )
-    logger.info("arecord started")
-    cs = CHUNK_SAMPLES * 2
+    logger.info("arecord started: %d", proc.pid)
+    
+    read_size = 3200  # Read larger chunks to avoid fragmentation
+    buf = bytearray()
+    chunk_count = 0
+    
     try:
         while True:
-            data = await asyncio.wait_for(capture_proc.stdout.read(cs), timeout=1.0)
-            if len(data) < cs:
+            data = await asyncio.wait_for(proc.stdout.read(read_size), timeout=2.0)
+            if not data:
+                await asyncio.sleep(0.01)
                 continue
-            rms = np.sqrt(np.mean(np.frombuffer(data, dtype=np.int16).astype(np.float64)**2))
-            chunk_count += 1
-            if chunk_count % 20 == 0:
-                logger.info("[LISTENING] %.2f RMS (%d)", rms, chunk_count)
-            try:
-                audio_tx_queue.put_nowait(bytes([0x01]) + data)
-            except queue.Full:
-                pass
+            
+            buf.extend(data)
+            
+            # Process complete chunks
+            while len(buf) >= CHUNK_SIZE:
+                chunk = bytes(buf[:CHUNK_SIZE])
+                buf = buf[CHUNK_SIZE:]
+                rms = np.sqrt(np.mean(np.frombuffer(chunk, dtype=np.int16).astype(np.float64)**2))
+                chunk_count += 1
+                if chunk_count % 20 == 0:
+                    logger.info("[LISTENING] %.2f RMS (%d)", rms, chunk_count)
+                try:
+                    audio_tx_queue.put_nowait(bytes([0x01]) + chunk)
+                except queue.Full:
+                    pass
     except asyncio.CancelledError:
         pass
     finally:
-        capture_proc.terminate()
-        await capture_proc.wait()
+        proc.terminate()
+        await proc.wait()
 
 async def send_audio(ws):
+    """Send audio to hub."""
     while True:
         frame = await asyncio.get_event_loop().run_in_executor(None, audio_tx_queue.get)
         await ws.send(frame)
+
+TTS_CHUNK = int(24000 * 0.2 * 2)
+audio_queue = asyncio.Queue()
+audio_tx_queue = queue.Queue()
+playback_proc = None
 
 async def main():
     logger.info("GLaDOS Spoke starting... Hub=%s Device=%s", HUB_URL, DEVICE_ID)
@@ -96,7 +110,7 @@ async def main():
                 while True:
                     await asyncio.sleep(0.1)
         except (ConnectionRefusedError, OSError, websockets.exceptions.ConnectionClosed) as e:
-            logger.error("Lost: %s. Retry in %ds", e, retry)
+            logger.error("Lost: %s. Retry %ds", e, retry)
             play_task.cancel()
             for t in [cap, snd]:
                 try: t.cancel()
