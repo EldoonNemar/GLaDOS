@@ -84,29 +84,13 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
                 session.last_speech_time = time.time()
 
 
-                # Keep max 10s buffer for speech detection
+                # Keep max 10s buffer
                 if len(session.audio_buffer) > 160000:  # 10s at 16kHz
                     session.audio_buffer = session.audio_buffer[-160000:]
                 
-                # VAD: check energy on last 1600 samples (100ms)
-                if len(session.audio_buffer) >= 3200:
-                    recent = np.frombuffer(bytes(session.audio_buffer[-3200:]), dtype=np.int16).astype(np.float64)
-                    rms = np.sqrt(np.mean(recent**2)) / 32768.0
-                    if chunk_count % 10 == 0:
-                        logger.info("[%s] VAD: rms=%.4f buf=%d speech=%d silence=%d",
-                                   device_id, rms, len(session.audio_buffer), session.has_speech, session.silence_count)
-                    if rms > 0.01:  # Speech
-                        if not session.has_speech:
-                            session.has_speech = True
-                        session.silence_count = 0
-                    elif session.has_speech:
-                        session.silence_count += 1
-                        if session.silence_count >= 5:  # 1s silence
-                            logger.info("[%s] VAD: processing %.1fs", device_id, len(session.audio_buffer)/16000)
-                            await _process_vad_asr_llm_tts(session, device_id, websocket)
-                            session.has_speech = False
-                            session.silence_count = 0
-                            session.audio_buffer.clear()
+                # Process every 8s of audio
+                if len(session.audio_buffer) >= 128000:  # 8s at 16kHz
+                    await _process_vad_asr_llm_tts(session, device_id, websocket)
             elif frame_type == 0x02:  # Wake word
                 wake_text = payload.decode("utf-8", errors="ignore")
                 logger.info("[%s] Wake word: '%s'", device_id, wake_text)
