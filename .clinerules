@@ -1,0 +1,12 @@
+- You have internet access, use it to find answers or best solutions to things.
+- Follow industry standards in coding.
+- Use libraries instead of rolling your own code. They have far more people working on it than just you.
+- You will be operating on the backend server. You have no access to the smart speaker. I'll have to test things and report back to you
+- Everything needs a test. Everything
+- Everything on the front and backend need to be run in docker. It adds overhead, yes... but the frontend is going to be nothing more than an audio router
+- Use compression for audio where possible
+- You have the ability to edit, read, and create files. Use them.
+- Do not make things up. If you don't know the answer, search the internet for it. If you can't find it, just tell me you don't know.
+- When you get to 60% context, automatically compact.
+- Don't perform the same task twice in a row. Cline will kill your process if you run the same thing 6 times.
+- 

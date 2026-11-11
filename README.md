@@ -2,6 +2,29 @@
 
 A sarcastic, deadpan AI assistant based on the Portal character GLaDOS.
 
+## Setup
+
+### 1. Download the LLM model (~5 GB)
+
+```bash
+./models/download-gemma4.sh
+```
+
+Requires: `pip install huggingface_hub`
+
+### 2. Start the backend
+
+```bash
+# Backend only (LLM + ASR/TTS + WebSocket hub)
+docker compose up -d glados_llama glados_engine glados_hub
+
+# Check health
+curl http://localhost:5050/health
+
+# Also start the Python spoke (on the device with the mic)
+docker compose --profile spoke up -d glados_spoke
+```
+
 ## Architecture
 
 ```
