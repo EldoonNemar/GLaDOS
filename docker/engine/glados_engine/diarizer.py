@@ -10,16 +10,11 @@ _diarizer = None
 _model = None
 
 def get_diarizer():
-    """Use WebRTC VAD + voice fingerprinting for speaker separation."""
+    """Use energy-based VAD for speaker separation."""
     global _diarizer
     if _diarizer is None:
-        try:
-            import webrtcvad
-            _diarizer = True
-            logger.info("VAD diarization loaded")
-        except ImportError:
-            logger.warning("webrtcvad not installed, using simple energy VAD")
-            _diarizer = False
+        _diarizer = True
+        logger.info("Energy VAD diarization loaded")
     return _diarizer is True
 
 def diarize(audio_bytes: bytes, sr: int = 16000) -> list:
