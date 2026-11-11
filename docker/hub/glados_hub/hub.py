@@ -94,7 +94,7 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
 
 
 async def _process_vad_asr_llm_tts(session: GLaDOSConversation, device_id: str, websocket: WebSocket):
-    """Run LLM -> TTS pipeline. ASR runs on spoke."""
+    """Transcribe audio -> LLM -> TTS pipeline."""
     try:
         audio_b64 = base64.b64encode(bytes(session.audio_buffer)).decode()
         session.audio_buffer.clear()
@@ -102,8 +102,22 @@ async def _process_vad_asr_llm_tts(session: GLaDOSConversation, device_id: str, 
         # Send "thinking" status
         await websocket.send_bytes(bytes([0x13]) + b"thinking..." + b"\x00" * 240)
 
-        # TODO: Send audio_b64 to ENGINE_URL/asr for transcription
-        user_text = f"[audio: {len(audio_b64)} chars]"
+        # Call ASR engine for transcription
+        try:
+            asr_resp = await http_client.post(
+                f"{ENGINE_URL}/asr",
+                json={"audio_base64": audio_b64, "sample_rate": 16000},
+            )
+            asr_result = asr_resp.json()
+            user_text = asr_result.get("text", "").strip()
+            if user_text.startswith("["):
+                user_text = f"[ASR unavailable — {user_text}]"
+            else:
+                logger.info("[%s] Heard: '%s'", device_id, user_text)
+        except Exception as asr_err:
+            logger.warning("[%s] ASR failed: %s", device_id, asr_err)
+            user_text = "[ASR error]"
+
         session.add_message("user", user_text)
 
         llm_response = await _call_llm(session)
