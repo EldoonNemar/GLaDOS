@@ -175,12 +175,12 @@ def _get_vosk_model():
     if _vosk_model is None:
         try:
             from vosk import Model, SpkModel
-            model_dir = os.path.join(MODEL_DIR, "vosk-model-small-en-0.15")
+            model_dir = os.path.join(MODEL_DIR, "vosk-model-small-en-us-0.15")
             if not os.path.exists(os.path.join(model_dir, "graph", "phones")):
                 logger.info("Downloading Vosk tiny model (~50MB)...")
                 import urllib.request
-                url = "https://alphacephei.com/vosk/models/vosk-model-small-en-0.15.zip"
-                tmp = os.path.join("/tmp", "vosk-model-small-en-0.15.zip")
+                url = "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip"
+                tmp = os.path.join("/tmp", "vosk-model-small-en-us-0.15.zip")
                 urllib.request.urlretrieve(url, tmp)
                 import zipfile
                 os.makedirs(model_dir, exist_ok=True)
