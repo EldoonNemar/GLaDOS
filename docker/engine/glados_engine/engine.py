@@ -214,15 +214,22 @@ async def transcribe(req: AudioRequest):
         
         import json as _json
         from vosk import KaldiRecognizer
+        rms = float(np.sqrt(np.mean((audio/32768.0)**2)))
+        peak = float(np.max(np.abs(audio/32768.0)))
+        logger.info("ASR debug: samples=%d rms=%.4f peak=%.4f dtype=%s", len(audio), rms, peak, audio.dtype)
         rec = KaldiRecognizer(model, 16000)
-        chunk_size = 4000  # ~250ms at 16kHz
+        chunk_size = 640  # ~40ms at 16kHz (Vosk prefers smaller chunks)
         for i in range(0, len(audio), chunk_size):
             chunk = audio[i:i+chunk_size].tobytes()
-            rec.AcceptWaveform(chunk)
+            got = rec.AcceptWaveform(chunk)
+            if got:
+                result = _json.loads(rec.Result())
+                text = result.get("text", "").strip()
+                if text:
+                    logger.info("ASR interim: '%s'", text)
         result = _json.loads(rec.FinalResult())
         text = result.get("text", "").strip()
         if not text:
-            rms = float(np.sqrt(np.mean((audio/32768.0)**2)))
             text = "silence" if rms < 0.01 else f"speech detected (rms={rms:.4f})"
         logger.info("Vosk ASR: '%s'", text)
         return TranscriptResponse(text=text, confidence=0.0)
