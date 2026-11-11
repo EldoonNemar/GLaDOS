@@ -1,16 +1,19 @@
-# ── Python Spoke: reSpeaker XVF3800 frontend ────────────────────────
 FROM python:3.12-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 GLADOS_HUB_URL=ws://host.docker.internal:5051
-
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libportaudio2 libasound2 && \
+    alsa-utils && \
     rm -rf /var/lib/apt/lists/*
 
+RUN echo 'pcm.!default {
+    type plug
+    slave.pcm "plughw:4,0"
+}
+
+ctl.!default {
+    type hw
+    card 4
+}' > /etc/asound.conf
+
 WORKDIR /app
-COPY spokes/python-spoke/requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY spokes/python-spoke/ ./
-
+COPY spokes/python-spoke/main.py ./
 CMD ["python", "main.py"]
