@@ -4,6 +4,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     alsa-utils && \
     rm -rf /var/lib/apt/lists/*
 
+RUN pip install --no-cache-dir numpy websockets
+
 COPY spokes/python-spoke/asound.conf /etc/asound.conf
 
 WORKDIR /app
