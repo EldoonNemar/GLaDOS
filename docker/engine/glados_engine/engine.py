@@ -199,6 +199,25 @@ def _get_vosk_model():
     return _vosk_model
 
 
+@app.post("/asr-debug")
+async def asr_debug(req: AudioRequest):
+    """Debug endpoint: dump raw audio stats."""
+    raw = base64.b64decode(req.audio_base64)
+    audio = np.frombuffer(raw, dtype=np.int16)
+    rms = float(np.sqrt(np.mean((audio/32768.0)**2)))
+    peak = float(np.max(np.abs(audio/32768.0)))
+    return {
+        "samples": len(audio),
+        "bytes": len(raw),
+        "rms": rms,
+        "peak": peak,
+        "min": int(audio.min()),
+        "max": int(audio.max()),
+        "mean": float(audio.mean()),
+        "first_10": audio[:10].tolist(),
+    }
+
+
 @app.post("/asr", response_model=TranscriptResponse)
 async def transcribe(req: AudioRequest):
     """Transcribe audio using Vosk STT."""
