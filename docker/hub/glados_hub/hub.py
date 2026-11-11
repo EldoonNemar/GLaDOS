@@ -1,3 +1,4 @@
+import numpy as np
 """
 glados_hub - WebSocket hub + LLM/TTS orchestrator.
 
