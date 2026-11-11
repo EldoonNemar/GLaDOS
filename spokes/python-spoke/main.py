@@ -119,12 +119,15 @@ async def capture_audio(ws):
         global chunk_count, last_chunk_log
         if status:
             logger.warning("Audio status: %s", status)
-        # indata shape: (frames, channels) - mix channels to 1
+        # indata shape: (frames, channels) - mix channels to 1 as float32 first
         if indata.ndim > 1:
-            mono = np.mean(indata, axis=1).astype(np.int16)
+            # Convert to float32 BEFORE averaging to prevent int overflow
+            mono = indata.mean(axis=1).astype(np.float32)
+            # Scale from [-1, 1] range to int16
+            mono = (mono * 32767).astype(np.int16)
         else:
             mono = indata
-        rms = np.sqrt(np.mean(mono.astype(np.float32)**2))
+        rms = np.sqrt(np.mean(mono.astype(np.float64)**2))
         chunk_count += 1
         if chunk_count % 20 == 0:
             logger.info("[LISTENING] Audio level: %.4f RMS (%d chunks)", rms, chunk_count)
