@@ -84,6 +84,8 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
                 session.last_speech_time = time.time()
                 chunk_count = getattr(session, 'chunk_count', 0) + 1
                 session.chunk_count = chunk_count
+                chunk_count = getattr(session, 'chunk_count', 0) + 1
+                session.chunk_count = chunk_count
                 # Keep max 10s buffer for speech detection
                 if len(session.audio_buffer) > 160000:  # 10s at 16kHz
                     session.audio_buffer = session.audio_buffer[-160000:]
