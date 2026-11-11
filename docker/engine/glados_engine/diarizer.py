@@ -1,80 +1,42 @@
-"""Speaker diarization using pyannote.audio."""
-import os
+"""Speaker diarization using VAD + voice fingerprinting.
+
+Uses energy-based VAD to split speech segments, then applies voice fingerprinting
+to assign speaker labels based on pitch/energy characteristics.
+
+Note: The 4-mic XVF3800 provides clean beamformed audio which works well with
+voice fingerprinting. For production multi-speaker scenarios, consider using
+pyannote.audio with a valid HuggingFace token.
+"""
 import numpy as np
-import torch
-from pathlib import Path
 import logging
 
 logger = logging.getLogger("glados_engine")
 
-_diarizer = None
-_model = None
-_TOKEN = os.environ.get("HF_TOKEN", None)
-
-def get_diarizer():
-    """Lazy-load pyannote diarization model."""
-    global _diarizer, _model
-    if _diarizer is None:
-        try:
-            from pyannote.audio import Pipeline
-            
-            if _TOKEN:
-                logger.info("Loading pyannote diarization model (auth enabled)...")
-                _model = Pipeline.from_pretrained(
-                    "pyannote/speaker-diarization-3.1",
-                    token=_TOKEN
-                )
-            else:
-                logger.warning("No HF_TOKEN set, falling back to energy VAD")
-                _diarizer = True
-                return _diarizer is True
-            
-            _model.to("cuda" if torch.cuda.is_available() else "cpu")
-            _diarizer = True
-            logger.info("Pyannote diarization loaded successfully")
-        except Exception as e:
-            logger.error("Diarization load failed: %s — falling back to VAD", e)
-            _diarizer = True  # Force VAD fallback
-            _model = None
-    return _diarizer is True
 
 def diarize(audio_bytes: bytes, sr: int = 16000) -> list:
     """Diarize audio: return list of {"speaker": str, "start": float, "end": float, "audio": bytes}.
     
-    Falls back to simple VAD splitting if diarization unavailable.
+    Uses energy-based VAD to split speech segments, then applies voice fingerprinting
+    to assign speaker labels based on pitch/energy characteristics.
     """
-    if not get_diarizer():
-        return _fallback_split(audio_bytes, sr)
-    
-    try:
-        # Convert to tensor
-        audio = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-        audio_tensor = torch.tensor(audio).unsqueeze(0)
-        
-        # Run diarization
-        diarization = _model({"audio": audio_tensor, "sample_rate": sr})
-        
-        segments = []
-        for turn, _, speaker in diarization.itertracks(yield_label=True):
-            segment_audio = audio[int(turn.start * sr):int(turn.end * sr)]
-            segments.append({
-                "speaker": speaker,
-                "start": turn.start,
-                "end": turn.end,
-                "audio": segment_audio.astype(np.int16).tobytes()
-            })
-        
-        logger.info("[diarizer] Found %d speaker segments", len(segments))
-        return segments
-    except Exception as e:
-        logger.error("Diarization failed: %s", e)
-        return _fallback_split(audio_bytes, sr)
-
-def _fallback_split(audio_bytes: bytes, sr: int = 16000) -> list:
-    """Simple VAD-based splitting when diarization unavailable."""
     audio = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
     
-    # Simple energy-based VAD
+    # Split into speech segments using energy-based VAD
+    segments = _split_segments(audio, sr)
+    
+    if not segments:
+        return []
+    
+    # Apply voice fingerprinting to assign speaker labels
+    segments = _assign_speakers(segments, sr)
+    
+    logger.info("[diarizer] Found %d speaker segments (%d unique speakers)", 
+                len(segments), len(set(s["speaker"] for s in segments)))
+    return segments
+
+
+def _split_segments(audio: np.ndarray, sr: int = 16000) -> list:
+    """Split audio into speech segments using energy-based VAD."""
     window_size = sr // 10  # 100ms windows
     segments = []
     in_speech = False
@@ -90,20 +52,66 @@ def _fallback_split(audio_bytes: bytes, sr: int = 16000) -> list:
         elif energy <= 0.01 and in_speech:
             in_speech = False
             seg_audio = audio[speech_start:i]
-            segments.append({
-                "speaker": "speaker_0",
-                "start": speech_start / sr,
-                "end": i / sr,
-                "audio": seg_audio.astype(np.int16).tobytes()
-            })
+            segments.append(seg_audio)
     
     if in_speech:
-        seg_audio = audio[speech_start:]
-        segments.append({
-            "speaker": "speaker_0",
-            "start": speech_start / sr,
-            "end": len(audio) / sr,
-            "audio": seg_audio.astype(np.int16).tobytes()
-        })
+        segments.append(audio[speech_start:])
     
     return segments
+
+
+def _assign_speakers(segments: list, sr: int = 16000) -> list:
+    """Assign speaker labels using voice fingerprinting (pitch + energy)."""
+    # Compute fingerprint for each segment
+    fingerprints = []
+    for seg in segments:
+        if len(seg) < sr // 4:  # Skip very short segments (< 250ms)
+            continue
+        # Compute pitch (zero-crossing rate) and energy
+        zcr = np.mean(np.abs(np.diff(np.sign(seg))))
+        energy = np.sqrt(np.mean(seg**2))
+        fingerprints.append((zcr, energy))
+    
+    # Simple clustering: if fingerprints differ significantly, assign different speakers
+    unique_speakers = {}
+    speaker_count = 0
+    result = []
+    
+    for i, (seg, (zcr, energy)) in enumerate(zip(segments, fingerprints)):
+        if len(seg) < sr // 4:
+            result.append({
+                "speaker": "speaker_0",
+                "start": (sum(len(segments[:j]) for j in range(i))) / sr,
+                "end": (sum(len(segments[:j+1]) for j in range(i))) / sr,
+                "audio": seg.astype(np.int16).tobytes()
+            })
+            continue
+        
+        # Find matching speaker based on fingerprint similarity
+        matched = False
+        for label, (ref_zcr, ref_energy) in unique_speakers.items():
+            # If fingerprints are similar, assign same speaker
+            zcr_diff = abs(zcr - ref_zcr) / (ref_zcr + 1e-6)
+            energy_diff = abs(energy - ref_energy) / (ref_energy + 1e-6)
+            if zcr_diff < 0.5 and energy_diff < 0.5:
+                result.append({
+                    "speaker": label,
+                    "start": (sum(len(segments[:j]) for j in range(i))) / sr,
+                    "end": (sum(len(segments[:j+1]) for j in range(i))) / sr,
+                    "audio": seg.astype(np.int16).tobytes()
+                })
+                matched = True
+                break
+        
+        if not matched:
+            speaker_count += 1
+            label = f"speaker_{speaker_count - 1}"
+            unique_speakers[label] = (zcr, energy)
+            result.append({
+                "speaker": label,
+                "start": (sum(len(segments[:j]) for j in range(i))) / sr,
+                "end": (sum(len(segments[:j+1]) for j in range(i))) / sr,
+                "audio": seg.astype(np.int16).tobytes()
+            })
+    
+    return result
