@@ -43,28 +43,28 @@ async def play_audio():
     """Background task: play audio from the queue."""
     global chunk_count
     buffer = bytearray()
+    play_dev = 0  # XVF3800 device index
+    
+    logger.info("Playback device: %d (%s)", play_dev, sd.query_devices()[play_dev]["name"])
+    
     while True:
         frame_type, chunk = await audio_queue.get()
         if frame_type == 0x11:
             buffer.extend(chunk)
-            logger.debug("[PLAYBACK] Received %d bytes TTS audio", len(chunk))
+            if chunk_count % 5 == 0:
+                logger.info("[PLAYBACK] Received %d bytes TTS audio", len(chunk))
             while len(buffer) >= TTS_SR * 0.1 * 2:
-                # Extract 100ms of TTS audio
+                # Extract 100ms of TTS audio (24kHz)
                 frame_data = bytes(buffer[:int(TTS_SR * 0.1 * 2)])
                 audio = np.frombuffer(frame_data, dtype=np.int16).astype(np.float32)
-                # Resample from 24000 -> 48000 (simple interpolation)
+                # Resample from 24kHz -> 16kHz for XVF3800
                 n_new = int(len(audio) * 16000 / 24000)
                 indices = np.linspace(0, len(audio) - 1, n_new)
                 resampled = np.interp(indices, np.arange(len(audio)), audio)
-                # Play at 48000Hz
-                sd.play((resampled * 32767).astype(np.int16), PLAYBACK_SR)
+                # Play at 16kHz on XVF3800
+                sd.play((resampled * 32767).astype(np.int16), 16000, device=play_dev)
                 sd.wait()
                 buffer = buffer[int(TTS_SR * 0.1 * 2):]
-                play_chunk = bytes(buffer[:int(PLAYBACK_SR * 0.2 * 2)])
-                audio_arr = np.frombuffer(play_chunk, dtype=np.int16)
-                sd.play(audio_arr, PLAYBACK_SR)
-                sd.wait()
-                buffer = buffer[int(PLAYBACK_SR * 0.2 * 2):]
         elif frame_type == 0x13:
             text = chunk.rstrip(b'\x00').decode('utf-8', errors='ignore')
             logger.info("[STATUS] %s", text)
