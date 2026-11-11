@@ -86,23 +86,40 @@ async def send_audio(ws):
 
 async def capture_audio(ws):
     """Capture audio from reSpeaker XVF3800 and stream to hub."""
-    # XVF3800 is device [0] with 4 mic channels at 16kHz.
-    # Open all 4 channels, mix to mono in callback.
-    devices_to_try = [0]
-    
+    # XVF3800 is a USB audio device with 4 mic channels at 16kHz.
+    # Auto-detect by name, not index.
+    target_dev = None
     logger.info("Available audio devices:")
     for idx, dev in enumerate(sd.query_devices()):
+        has_input = dev["max_input_channels"] > 0
         logger.info("  [%d] %s (in: %s, out: %s, rate=%.0fHz, ch=%d)", idx, dev["name"],
-                   "✓" if dev["max_input_channels"] > 0 else "✗",
+                   "✓" if has_input else "✗",
                    "✓" if dev["max_output_channels"] > 0 else "✗",
                    dev["default_samplerate"],
                    dev["max_input_channels"])
-
+        if has_input and any(kw in dev["name"].lower() for kw in ["xvf", "reSpeaker", "re speaker", "3800", "usb audio"]):
+            target_dev = idx
+            logger.info("  --> Matched XVF3800 as device %d", idx)
+    if target_dev is None:
+        # Fallback: first device with input that supports 16kHz
+        for idx, dev in enumerate(sd.query_devices()):
+            if dev["max_input_channels"] > 0 and dev["default_samplerate"] == 16000:
+                target_dev = idx
+                logger.info("  --> Fallback to device %d (16kHz with input)", idx)
+                break
+    if target_dev is None:
+        # Last resort: first device with input
+        for idx, dev in enumerate(sd.query_devices()):
+            if dev["max_input_channels"] > 0:
+                target_dev = idx
+                logger.info("  --> Last resort: device %d", idx)
+                break
+    
     def audio_callback(indata, frames, time_info, status):
         global chunk_count, last_chunk_log
         if status:
             logger.warning("Audio status: %s", status)
-        # indata shape: (frames, channels) - mix 4 channels to 1
+        # indata shape: (frames, channels) - mix channels to 1
         if indata.ndim > 1:
             mono = np.mean(indata, axis=1).astype(np.int16)
         else:
@@ -116,21 +133,19 @@ async def capture_audio(ws):
         except queue.Full:
             pass
 
-    for dev in devices_to_try:
-        try:
-            dev_info = sd.query_devices()[dev]
-            n_ch = dev_info["max_input_channels"]
-            logger.info("Opening device %d (%s) with %d channels at %d Hz...", dev, dev_info["name"], n_ch, SAMPLE_RATE)
-            with sd.InputStream(samplerate=SAMPLE_RATE, channels=n_ch, dtype='int16',
-                                device=dev,
-                                callback=audio_callback, blocksize=CHUNK_SAMPLES):
-                logger.info("Audio capture started on device %d at %d Hz (%d ch -> mono)", dev, SAMPLE_RATE, n_ch)
-                while True:
-                    await asyncio.sleep(0.1)
-        except Exception as e:
-            logger.warning("Device %d failed: %s", dev, e)
-    
-    logger.error("All devices failed. Spoke cannot capture audio.")
+    dev_info = sd.query_devices()[target_dev]
+    n_ch = dev_info["max_input_channels"]
+    try:
+        logger.info("Opening device %d (%s) with %d channels at %d Hz...", target_dev, dev_info["name"], n_ch, SAMPLE_RATE)
+        with sd.InputStream(samplerate=SAMPLE_RATE, channels=n_ch, dtype='int16',
+                            device=target_dev,
+                            callback=audio_callback, blocksize=CHUNK_SAMPLES):
+            logger.info("Audio capture started on device %d (%s) at %d Hz (%d ch -> mono)", target_dev, dev_info["name"], SAMPLE_RATE, n_ch)
+            while True:
+                await asyncio.sleep(0.1)
+    except Exception as e:
+        logger.error("Failed to open device %d: %s", target_dev, e)
+        raise
 
 
 async def list_devices():
