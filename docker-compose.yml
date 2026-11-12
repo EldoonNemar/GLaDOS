@@ -95,7 +95,7 @@ services:
     devices:
       - "/dev/snd:/dev/snd"
     environment:
-      - GLADOS_HUB_URL=ws://localhost:5051
+      - GLADOS_HUB_URL=ws://glados_hub:5051
       - GLADOS_DEVICE_ID=python-spoke-001
 
 networks:

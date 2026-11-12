@@ -23,7 +23,7 @@ import httpx
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
 
 MAX_CONTEXT_WORDS = 200
-WAKE_WORDS = ["glados", "hey glados"]
+WAKE_WORDS = ["glados", "gladys", "glahdose", "hey glados", "hey gladys", "hey glahdose"]
 NAME_PATTERN = re.compile(r"(?:i['\s]+am|my name is|call me|you can call me)\s+([a-zA-Z][a-zA-Z'\s-]{1,20})", re.IGNORECASE)
 logger = logging.getLogger("glados_hub")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")

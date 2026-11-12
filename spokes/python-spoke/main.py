@@ -98,6 +98,7 @@ async def main():
     logger.info("GLaDOS Spoke starting... Hub=%s Device=%s", HUB_URL, DEVICE_ID)
     play_task = asyncio.create_task(play_audio())
     retry = 1
+    cap = snd = rcv = None
     while True:
         try:
             async with websockets.connect(f"{HUB_URL}/ws/{DEVICE_ID}") as ws:
