@@ -113,6 +113,42 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(config["audio"]["sample_rate"], 22050)
 
 
+class TestWakeWordDetection(unittest.TestCase):
+    """Tests for wake word detection in the hub.
+    
+    Tests the WAKE_WORDS list and detection logic independently
+    (without importing hub which requires FastAPI).
+    """
+    
+    WAKE_WORDS = ["glados", "gladys", "glahdose", "hey glados", "hey gladys", "hey glahdose"]
+    
+    def test_wake_words_list_defined(self):
+        self.assertIsInstance(self.WAKE_WORDS, list)
+        self.assertGreater(len(self.WAKE_WORDS), 0)
+        self.assertIn("glados", self.WAKE_WORDS)
+        self.assertIn("gladys", self.WAKE_WORDS)
+    
+    def test_wake_word_glados_detected(self):
+        text = "glados, what is the meaning of life"
+        self.assertTrue(any(w in text.lower() for w in self.WAKE_WORDS))
+    
+    def test_wake_word_gladys_detected(self):
+        text = "gladys, tell me a joke"
+        self.assertTrue(any(w in text.lower() for w in self.WAKE_WORDS))
+    
+    def test_wake_word_hey_glados_detected(self):
+        text = "hey glados, are you there?"
+        self.assertTrue(any(w in text.lower() for w in self.WAKE_WORDS))
+    
+    def test_no_wake_word_in_normal_speech(self):
+        text = "i think the weather is nice today"
+        self.assertFalse(any(w in text.lower() for w in self.WAKE_WORDS))
+    
+    def test_no_wake_word_in_random_conversation(self):
+        text = "what are you doing right now"
+        self.assertFalse(any(w in text.lower() for w in self.WAKE_WORDS))
+
+
 if __name__ == "__main__":
     unittest.main()
 

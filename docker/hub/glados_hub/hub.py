@@ -33,7 +33,6 @@ HUB_PORT = int(os.environ.get("HUB_PORT", "5051"))
 REST_PORT = int(os.environ.get("REST_PORT", "5050"))
 LLAMA_URL = os.environ.get("LLAMA_URL", "http://glados_llama:8080")
 ENGINE_URL = os.environ.get("ENGINE_URL", "http://glados_engine:8081")
-WAKE_WORD = os.environ.get("WAKE_WORD", "glados").lower()
 
 PROMPT_PATH = Path(__file__).parent / "prompts" / "glados_system.txt"
 with open(PROMPT_PATH) as f:
@@ -165,7 +164,7 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
                             else:
                                 sdata["silence_count"] = 0
                         
-                        if session.silence_count >= 8:  # Global 0.8s silence
+                        if session.silence_count >= 20:  # Global 2.0s silence (wait for complete sentences)
                             try:
                                 # 1. Voice fingerprint for this segment
                                 speaker_id = session.fingerprint_voice(bytes(session.audio_buffer))
@@ -183,20 +182,36 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
                                 logger.info("[%s] '%s' (speaker: %s, conv: %d entries)", 
                                            device_id, text, speaker_id, len(session.conversation_history))
                                 
-                                # 4. Decide if GLaDOS should respond
-                                if session.interrupting:
+                                # 4. Check for wake word FIRST, then fall back to LLM
+                                text_lower = text.lower()
+                                is_wake_word = any(wake_word in text_lower for wake_word in WAKE_WORDS)
+                                
+                                if is_wake_word:
+                                    logger.info("[%s] Wake word detected in: '%s'", device_id, text)
+                                    session.add_message("user", text)
+                                    try:
+                                        resp = await _call_llm(session)
+                                        session.add_message("assistant", resp)
+                                        await websocket.send_bytes(bytes([0x13]) + b"thinking..." + b"\x00" * 240)
+                                        await _synthesize_and_stream(session, device_id, websocket, resp)
+                                    finally:
+                                        session.interrupting = False
+                                elif session.interrupting:
                                     logger.info("[%s] GLaDOS already responding, skip", device_id)
                                 else:
+                                    # No wake word — use LLM to decide if GLaDOS should chime in
                                     should_respond = await _should_glados_respond(session, text)
                                     if should_respond:
                                         session.interrupting = True
                                         logger.info("[%s] GLaDOS chimes in!", device_id)
                                         session.add_message("user", text)
-                                        resp = await _call_llm(session)
-                                        session.add_message("assistant", resp)
-                                        await websocket.send_bytes(bytes([0x13]) + b"thinking..." + b"\x00" * 240)
-                                        await _synthesize_and_stream(session, device_id, websocket, resp)
-                                        session.interrupting = False
+                                        try:
+                                            resp = await _call_llm(session)
+                                            session.add_message("assistant", resp)
+                                            await websocket.send_bytes(bytes([0x13]) + b"thinking..." + b"\x00" * 240)
+                                            await _synthesize_and_stream(session, device_id, websocket, resp)
+                                        finally:
+                                            session.interrupting = False
                             except Exception as e:
                                 logger.error("[%s] Processing error: %s", device_id, e)
                             session.audio_buffer.clear()
@@ -283,10 +298,11 @@ async def _call_llm(session: GLaDOSConversation) -> str:
 async def _synthesize_and_stream(session: GLaDOSConversation, device_id: str, websocket: WebSocket, text: str):
     """Synthesize TTS and stream audio back to spoke."""
     try:
-        resp = await http_client.post(
-            f"{ENGINE_URL}/tts-kokoro",
-            json={"text": text, "speed": 1.0},
-        )
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                f"{ENGINE_URL}/tts-kokoro",
+                json={"text": text, "speed": 1.0},
+            )
         if resp.status_code != 200:
             logger.warning("[%s] TTS returned %d: %s", device_id, resp.status_code, resp.text[:200])
             return
