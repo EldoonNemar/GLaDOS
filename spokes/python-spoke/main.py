@@ -108,9 +108,12 @@ async def capture_audio(ws):
                 
                 # Apply noise suppression if available
                 if _ns is not None:
-                    raw = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32768.0
-                    cleaned = _ns.process(raw)
-                    chunk = (cleaned * 32768.0).astype(np.int16).tobytes()
+                    try:
+                        raw = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32768.0
+                        cleaned = _ns.process(raw)
+                        chunk = (cleaned * 32768.0).astype(np.int16).tobytes()
+                    except Exception as e:
+                        logger.error("[NS] Error: %s, sending raw", e)
                 
                 rms = np.sqrt(np.mean(np.frombuffer(chunk, dtype=np.int16).astype(np.float64)**2))
                 chunk_count += 1
