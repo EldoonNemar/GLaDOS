@@ -117,15 +117,40 @@ ctl.!default {{ type hw; card {card} }}
 
 
 def configure_asound_whisplay(card):
-    """Configure ALSA for Whisplay HAT (16 kHz mono capture/playback)."""
-    config = f"""pcm.whisplay_capture {{
-    type plug
-    slave {{ pcm "plug:hw:{card},0"; rate 16000; channels 1 }}
+    """Configure ALSA for Whisplay HAT (48kHz stereo → 16kHz mono).
+
+    The WM8960 on the Whisplay HAT natively runs at 48kHz stereo.
+    We use a route+plug chain to convert to 16kHz mono for voice.
+    """
+    config = f"""# Whisplay HAT: route stereo to mono, then resample
+pcm.whisplay_stereo_to_mono {{
+    type route
+    slave {{
+        pcm "hw:{card},0"
+        channels 2
+    }}
+    ttable.0.0 0.5
+    ttable.1.0 0.5
 }}
+
+pcm.whisplay_capture {{
+    type plug
+    slave {{
+        pcm "whisplay_stereo_to_mono"
+        rate 16000
+        channels 1
+    }}
+}}
+
 pcm.whisplay_playback {{
     type plug
-    slave {{ pcm "plug:hw:{card},0"; rate 16000; channels 1 }}
+    slave {{
+        pcm "hw:{card},0"
+        rate 16000
+        channels 2
+    }}
 }}
+
 pcm.!default {{ type plug; slave.pcm "whisplay_capture" }}
 ctl.!default {{ type hw; card {card} }}
 """
