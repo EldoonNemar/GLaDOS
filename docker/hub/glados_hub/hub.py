@@ -152,7 +152,7 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
                     logger.info("[%s] VAD rms=%.6f (threshold=0.008, speech=%s, silence=%d)", 
                                device_id, rms, session.speech_active, session.silence_count)
                     
-                    if rms > 0.008:  # Speech threshold - raised for Whisplay HAT (noise floor ~0.01)
+                    if rms > 0.010:  # Speech threshold - raised for Whisplay HAT (speech ~0.017, noise ~0.006-0.010)
                         if not session.speech_active:
                             session.speech_active = True
                         session.silence_count = 0
