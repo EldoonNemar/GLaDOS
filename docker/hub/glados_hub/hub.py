@@ -65,8 +65,8 @@ class SileroVADSession:
                     str(VAD_MODEL_PATH),
                     providers=["CPUExecutionProvider"],
                 )
-                self._h = np.zeros((2, 1, 64), dtype=np.float32)
-                self._c = np.zeros((2, 1, 64), dtype=np.float32)
+                # Model inputs: 'input', 'state', 'sr' — outputs: 'output', 'stateN'
+                self._state = np.zeros((2, 1, 64), dtype=np.float32)
                 self._enabled = True
                 self._energy = None
                 logger.info("Silero VAD loaded from %s", VAD_MODEL_PATH)
@@ -89,10 +89,9 @@ class SileroVADSession:
             ort_inputs = {
                 "input": audio.reshape(1, -1),
                 "sr": np.array(16000, dtype=np.int64),
-                "h": self._h,
-                "c": self._c,
+                "state": self._state,
             }
-            outputs, self._h, self._c = self._session.run(None, ort_inputs)
+            outputs, self._state = self._session.run(None, ort_inputs)
             prob = float(outputs[0][0][0])
             return prob > 0.5, prob
         # Energy-based fallback
