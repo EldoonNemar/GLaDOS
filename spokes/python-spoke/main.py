@@ -32,6 +32,7 @@ logger.info("Audio config: capture=%s", CAPTURE_DEVICE)
 
 import subprocess
 import os
+import time
 
 AUDIO_PIPE = "/tmp/audio_fifo"
 
@@ -41,7 +42,7 @@ def _playback_worker(audio_queue):
     if not os.path.exists(AUDIO_PIPE):
         os.mkfifo(AUDIO_PIPE)
     
-    # Start aplay reading from stdin (ALSA will handle rate conversion)
+    # Start aplay reading from FIFO
     aplay = subprocess.Popen(
         ["aplay", "-f", "S16_LE", "-r", "22050", "-D", "plughw:3,0"],
         stdin=subprocess.PIPE,
@@ -61,11 +62,18 @@ def _playback_worker(audio_queue):
                 buffer = buffer[TTS_CHUNK:]
                 # Hub sends 22050 Hz, aplay expects 22050 Hz - no resampling needed
                 out = np.frombuffer(frame, dtype=np.int16)
-                try:
-                    aplay.stdin.write(out.tobytes())
-                    aplay.stdin.flush()
-                except Exception:
-                    break
+                # Non-blocking write with retry
+                written = 0
+                while written < len(out):
+                    try:
+                        n = aplay.stdin.write(out[written:])
+                        written += n if n else len(out[written:written+1])
+                        if n == 0:
+                            time.sleep(0.01)
+                    except BlockingIOError:
+                        time.sleep(0.01)
+                    except Exception:
+                        break
         elif frame_type == 0x13:
             pass
         elif frame_type == 0x12:
@@ -104,14 +112,22 @@ async def play_audio():
 
 async def receive_audio(ws):
     """Receive WebSocket frames and route to queues."""
+    count = 0
     while True:
-        data = await ws.recv()
-        frame_type = data[0]
-        payload = data[1:]
-        if frame_type == 0x11:
-            audio_queue.put_nowait((0x11, payload))
-        elif frame_type in (0x12, 0x13):
-            audio_queue.put_nowait((frame_type, payload))
+        try:
+            data = await ws.recv()
+            count += 1
+            if count <= 5:
+                logger.info("[WS] Frame #%d type=0x%02x len=%d", count, data[0], len(data)-1)
+            frame_type = data[0]
+            payload = data[1:]
+            if frame_type == 0x11:
+                audio_queue.put_nowait((0x11, payload))
+            elif frame_type in (0x12, 0x13):
+                audio_queue.put_nowait((frame_type, payload))
+        except Exception as e:
+            logger.error("[WS] recv error: %s", e)
+            break
 
 
 async def capture_audio(ws):

@@ -208,9 +208,12 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
                                     session.add_message("user", text)
                                     try:
                                         resp = await _call_llm(session)
-                                        session.add_message("assistant", resp)
-                                        await websocket.send_bytes(bytes([0x13]) + b"thinking..." + b"\x00" * 240)
-                                        await _synthesize_and_stream(session, device_id, websocket, resp)
+                                        if not resp:
+                                            logger.warning("[%s] Empty LLM response, skipping TTS", device_id)
+                                        else:
+                                            session.add_message("assistant", resp)
+                                            await websocket.send_bytes(bytes([0x13]) + b"thinking..." + b"\x00" * 240)
+                                            await _synthesize_and_stream(session, device_id, websocket, resp)
                                     finally:
                                         session.interrupting = False
                                 elif session.interrupting:
@@ -224,9 +227,12 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
                                         session.add_message("user", text)
                                         try:
                                             resp = await _call_llm(session)
-                                            session.add_message("assistant", resp)
-                                            await websocket.send_bytes(bytes([0x13]) + b"thinking..." + b"\x00" * 240)
-                                            await _synthesize_and_stream(session, device_id, websocket, resp)
+                                            if not resp:
+                                                logger.warning("[%s] Empty LLM response, skipping TTS", device_id)
+                                            else:
+                                                session.add_message("assistant", resp)
+                                                await websocket.send_bytes(bytes([0x13]) + b"thinking..." + b"\x00" * 240)
+                                                await _synthesize_and_stream(session, device_id, websocket, resp)
                                         finally:
                                             session.interrupting = False
                             except Exception as e:
