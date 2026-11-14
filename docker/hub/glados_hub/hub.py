@@ -41,50 +41,13 @@ with open(PROMPT_PATH) as f:
 
 logger.info("GLaDOS system prompt loaded (%d chars)", len(SYSTEM_PROMPT))
 
-# ── WAV file saver for debugging ────────────────────────────────────
-def save_wav(filename: str, audio_bytes: bytes, sample_rate: int = 16000):
-    """Save raw 16-bit PCM audio as WAV file."""
-    try:
-        samples = np.frombuffer(audio_bytes, dtype=np.int16)
-        with open(filename, 'wb') as f:
-            f.write(b'RIFF')
-            f.write(struct.pack('<I', 36 + len(audio_bytes)))
-            f.write(b'WAVE')
-            f.write(b'fmt ')
-            f.write(struct.pack('<I', 16))
-            f.write(struct.pack('<H', 1))
-            f.write(struct.pack('<H', 1))
-            f.write(struct.pack('<I', sample_rate))
-            f.write(struct.pack('<I', sample_rate * 2))
-            f.write(struct.pack('<H', 2))
-            f.write(struct.pack('<H', 16))
-            f.write(b'data')
-            f.write(struct.pack('<I', len(audio_bytes)))
-            f.write(audio_bytes)
-        logger.info("Saved debug WAV: %s (%d samples)", filename, len(samples))
-    except Exception as e:
-        logger.error("WAV save failed: %s", e)
-
-
-async def _save_periodic_wav():
-    """Save last 5s of audio every 10s for debugging."""
-    ts = time.strftime("%Y%m%d_%H%M%S")
-    while True:
-        await asyncio.sleep(10)
-        for dev_id, sess in active_sessions.items():
-            if sess.audio_buffer and len(sess.audio_buffer) >= 1600:
-                fname = f"/tmp/audio_debug_{dev_id}_{ts}.wav"
-                save_wav(fname, bytes(sess.audio_buffer[-80000:]))
-
-
 app = FastAPI(title="GLaDOS Hub", version="0.1.0")
 active_sessions: dict = {}
 http_client = httpx.AsyncClient(timeout=120.0)
 
 @app.on_event("startup")
 async def _startup():
-    asyncio.create_task(_save_periodic_wav())
-    logger.info("Started periodic WAV saver (debug)")
+    logger.info("GLaDOS Hub started")
 
 class GLaDOSConversation:
     MAX_WORDS = 300
@@ -152,6 +115,13 @@ class GLaDOSConversation:
                 self.conversation_history = self.conversation_history[-50:]
             
             self.speakers[speaker_id]["last_heard"] = time.time()
+    
+    def add_message(self, role: str, content: str):
+        """Add a message to the LLM conversation."""
+        self.messages.append({"role": role, "content": content})
+        # Keep messages manageable
+        if len(self.messages) > 100:
+            self.messages = [self.messages[0]] + self.messages[-99:]
 
 
 
@@ -163,7 +133,11 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
     active_sessions[device_id] = session
     try:
         while True:
-            data = await websocket.receive_bytes()
+            try:
+                data = await websocket.receive_bytes()
+            except Exception:
+                logger.info("[%s] Client disconnected", device_id)
+                break
             if len(data) == 0:
                 continue
             frame_type = data[0]
@@ -179,10 +153,7 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
             elif frame_type == 0x01 and session.is_listening:  # Audio chunk
                 session.audio_buffer.extend(payload)
                 session.last_speech_time = time.time()
-                # Verbose logging disabled - uncomment for debugging
-                # logger.info("[%s] Audio frame: %d bytes (buffer: %d)", device_id, len(payload), len(session.audio_buffer))
-
-
+                
                 # Keep max 15s buffer
                 if len(session.audio_buffer) > 240000:  # 15s at 16kHz
                     session.audio_buffer = session.audio_buffer[-240000:]
@@ -191,17 +162,14 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
                 if len(session.audio_buffer) >= 1600:
                     recent = np.frombuffer(bytes(session.audio_buffer[-1600:]), dtype=np.int16).astype(np.float64)
                     rms = np.sqrt(np.mean(recent**2)) / 32768.0
-                    # Debug: logger.info("[%s] VAD rms=%.6f (speech=%s, silence=%d)",
-                    #            device_id, rms, session.speech_active, session.silence_count)
                     
-                    if rms > 0.010:  # Speech threshold - raised for Whisplay HAT (speech ~0.017, noise ~0.006-0.010)
+                    if rms > 0.030:  # Speech threshold (raised to avoid noise triggers)
                         if not session.speech_active:
                             session.speech_active = True
+                            logger.info("[%s] SPEECH STARTED (rms=%.4f)", device_id, rms)
                         session.silence_count = 0
                     elif session.speech_active:
                         session.silence_count += 1
-                        if session.silence_count % 10 == 0:
-                            logger.info("[%s] SILENCE COUNT: %d", device_id, session.silence_count)
                         # Update per-speaker VAD states
                         for sid, sdata in session.speakers.items():
                             if sdata.get("speech_active", False):
@@ -211,11 +179,8 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
                             else:
                                 sdata["silence_count"] = 0
                         
-                        if session.silence_count >= 20:  # Global 2.0s silence (wait for complete sentences)
+                        if session.silence_count >= 7:  # Global 0.7s silence
                             logger.info("[%s] *** SILENCE COUNT REACHED %d, sending to ASR ***", device_id, session.silence_count)
-                            # Save debug WAV
-                            ts = time.strftime("%Y%m%d_%H%M%S")
-                            save_wav(f"/tmp/audio_debug_{ts}.wav", bytes(session.audio_buffer))
                             
                             try:
                                 # 1. Voice fingerprint for this segment
@@ -252,7 +217,7 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
                                     logger.info("[%s] GLaDOS already responding, skip", device_id)
                                 else:
                                     # No wake word — use LLM to decide if GLaDOS should chime in
-                                    should_respond = await _should_glados_respond(session, text)
+                                    should_respond = await _should_glados_respond(session, device_id, text)
                                     if should_respond:
                                         session.interrupting = True
                                         logger.info("[%s] GLaDOS chimes in!", device_id)
@@ -313,12 +278,16 @@ async def _process_vad_asr_llm_tts(session: GLaDOSConversation, device_id: str, 
             user_text = "[ASR error]"
 
         session.add_message("user", user_text)
+        logger.info("[%s] About to call LLM", device_id)
 
         llm_response = await _call_llm(session)
         session.add_message("assistant", llm_response)
+        logger.info("[%s] LLM responded: '%s'", device_id, llm_response[:100])
 
         # Synthesize TTS
+        logger.info("[%s] Calling _synthesize_and_stream", device_id)
         await _synthesize_and_stream(session, device_id, websocket, llm_response)
+        logger.info("[%s] _synthesize_and_stream completed", device_id)
     except Exception as e:
         logger.error("[%s] Processing error: %s", device_id, e, exc_info=True)
         try:
@@ -352,8 +321,8 @@ async def _synthesize_and_stream(session: GLaDOSConversation, device_id: str, we
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(
-                f"{ENGINE_URL}/tts-kokoro",
-                json={"text": text, "speed": 1.0},
+                f"{ENGINE_URL}/tts",
+                json={"text": text},
             )
         if resp.status_code != 200:
             logger.warning("[%s] TTS returned %d: %s", device_id, resp.status_code, resp.text[:200])
@@ -366,12 +335,13 @@ async def _synthesize_and_stream(session: GLaDOSConversation, device_id: str, we
             try:
                 chunk = audio_bytes[i:i + int(chunk_size)]
                 await websocket.send_bytes(bytes([0x11]) + chunk)
+                await asyncio.sleep(0.2)  # Pace: 0.2s per chunk matches audio duration
             except (Exception,):  # client disconnected during streaming
                 logger.info("[%s] Client disconnected during TTS playback", device_id)
                 return
         logger.info("[%s] Sent %d bytes of TTS audio (%d Hz)", device_id, len(audio_bytes), sr)
     except Exception as e:
-        logger.error("[%s] TTS failed: %s", device_id, e)
+        logger.error("[%s] TTS failed: %s", device_id, e, exc_info=True)
         try:
             await websocket.send_bytes(bytes([0x13]) + f"tts error: {e}".encode() + b"\x00" * 200)
         except (Exception,):  # already disconnected
@@ -379,7 +349,7 @@ async def _synthesize_and_stream(session: GLaDOSConversation, device_id: str, we
 
 
 
-async def _should_glados_respond(session: GLaDOSConversation, latest_text: str) -> bool:
+async def _should_glados_respond(session: GLaDOSConversation, device_id: str, latest_text: str) -> bool:
     """Use LLM to decide if GLaDOS should chime in naturally."""
     try:
         # Build context summary
@@ -407,6 +377,8 @@ Answer: """
             },
         )
         result = resp.json()["choices"][0]["message"]["content"].strip().upper()
+        # TEMP: Force YES for testing - remove when wake word flow is working
+        return True
         return "YES" in result
     except Exception as e:
         logger.warning("Intent check failed: %s", e)

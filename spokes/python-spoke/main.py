@@ -27,45 +27,79 @@ _ns = None
 # setup_audio.py configures /etc/asound.conf to set defaults.
 
 CAPTURE_DEVICE = os.environ.get("GLADOS_CAPTURE_DEVICE", "default")
-PLAYBACK_DEVICE = os.environ.get("GLADOS_PLAYBACK_DEVICE", "default")
-
-logger.info("Audio config: capture=%s playback=%s", CAPTURE_DEVICE, PLAYBACK_DEVICE)
+logger.info("Audio config: capture=%s", CAPTURE_DEVICE)
 
 
-async def play_audio():
-    """Play TTS audio using aplay subprocess."""
+import subprocess
+import os
+
+AUDIO_PIPE = "/tmp/audio_fifo"
+
+def _playback_worker(audio_queue):
+    """Background process for TTS playback using a FIFO pipe to aplay."""
+    # Create FIFO if it doesn't exist
+    if not os.path.exists(AUDIO_PIPE):
+        os.mkfifo(AUDIO_PIPE)
+    
+    # Start aplay reading from stdin (ALSA will handle rate conversion)
+    aplay = subprocess.Popen(
+        ["aplay", "-f", "S16_LE", "-r", "22050", "-D", "plughw:3,0"],
+        stdin=subprocess.PIPE,
+        stderr=subprocess.DEVNULL
+    )
+    
     buffer = bytearray()
     while True:
-        frame_type, data = await audio_queue.get()
+        try:
+            frame_type, data = audio_queue.get(timeout=1)
+        except Exception:
+            continue
         if frame_type == 0x11:
             buffer.extend(data)
-            logger.info("[PLAYBACK] Got %d bytes (total: %d)", len(data), len(buffer))
             while len(buffer) >= TTS_CHUNK:
                 frame = bytes(buffer[:TTS_CHUNK])
                 buffer = buffer[TTS_CHUNK:]
-                audio = np.frombuffer(frame, dtype=np.int16).astype(np.float32)
-                n = int(len(audio) * 16000 / 24000)
-                idx = np.linspace(0, len(audio) - 1, n)
-                out = (np.interp(idx, np.arange(len(audio)), audio) * 32767).astype(np.int16).tobytes()
-                if playback_proc and playback_proc.poll() is None:
-                    playback_proc.stdin.write(out)
-                else:
-                    if playback_proc:
-                        try:
-                            playback_proc.wait(timeout=1)
-                        except Exception:
-                            pass
-                    playback_proc = await asyncio.create_subprocess_exec(
-                        "aplay", "-f", "S16_LE", "-r", "16000",
-                        "-D", PLAYBACK_DEVICE,
-                        stdin=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.DEVNULL
-                    )
-                    playback_proc.stdin.write(out)
+                # Hub sends 22050 Hz, aplay expects 22050 Hz - no resampling needed
+                out = np.frombuffer(frame, dtype=np.int16)
+                try:
+                    aplay.stdin.write(out.tobytes())
+                    aplay.stdin.flush()
+                except Exception:
+                    break
         elif frame_type == 0x13:
-            logger.info("[STATUS] %s", data.rstrip(b'\x00').decode('utf-8', errors='ignore'))
+            pass
         elif frame_type == 0x12:
-            logger.info("[CONTROL] session ended")
+            break
+    
+    try:
+        aplay.stdin.close()
+        aplay.wait(timeout=2)
+    except Exception:
+        aplay.kill()
+
+
+async def play_audio():
+    """Start playback worker process and wait for it to finish."""
+    # Create a multiprocessing Queue for audio data
+    mp_queue = multiprocessing.Queue()
+    process = multiprocessing.Process(target=_playback_worker, args=(mp_queue,), daemon=True)
+    process.start()
+    logger.info("[PLAYBACK] Process started (PID: %d)", process.pid)
+    
+    # Relay from asyncio queue to multiprocessing queue
+    try:
+        while True:
+            frame_type, data = await audio_queue.get()
+            mp_queue.put_nowait((frame_type, data))
+    except asyncio.CancelledError:
+        pass
+    finally:
+        # Signal stop
+        mp_queue.put_nowait((0x12, b''))
+        process.join(timeout=5)
+        if process.is_alive():
+            process.terminate()
+        logger.info("[PLAYBACK] Process stopped")
 
 
 async def receive_audio(ws):
@@ -133,19 +167,18 @@ async def send_audio(ws):
 TTS_CHUNK = int(24000 * 0.2 * 2)
 audio_queue = asyncio.Queue()
 audio_tx_queue = queue.Queue()
-playback_proc = None
 
 
 async def main():
     logger.info("GLaDOS Spoke starting... Hub=%s Device=%s", HUB_URL, DEVICE_ID)
-    play_task = asyncio.create_task(play_audio())
     retry = 1
-    cap = snd = rcv = None
+    cap = snd = rcv = play_task = None
     while True:
         try:
-            async with websockets.connect(f"{HUB_URL}/ws/{DEVICE_ID}") as ws:
+            async with websockets.connect(f"{HUB_URL}/ws/{DEVICE_ID}", ping_interval=20, ping_timeout=10, close_timeout=5) as ws:
                 logger.info("Connected!")
                 retry = 1
+                play_task = asyncio.create_task(play_audio())
                 cap = asyncio.create_task(capture_audio(ws))
                 snd = asyncio.create_task(send_audio(ws))
                 rcv = asyncio.create_task(receive_audio(ws))
@@ -153,17 +186,38 @@ async def main():
                 logger.info("Listening...")
                 while True:
                     await asyncio.sleep(0.1)
-        except (ConnectionRefusedError, OSError, websockets.exceptions.ConnectionClosedError) as e:
-            logger.error("Lost: %s. Retry %ds", e, retry)
-            play_task.cancel()
+        except (ConnectionRefusedError, OSError, websockets.exceptions.ConnectionClosedError, websockets.exceptions.InvalidStatusCode) as e:
+            logger.error("Lost connection: %s. Retry %ds", e, retry)
+            if play_task:
+                play_task.cancel()
             for t in [cap, snd, rcv]:
                 try:
                     t.cancel()
                 except Exception:
                     pass
+            while not audio_tx_queue.empty():
+                try:
+                    audio_tx_queue.get_nowait()
+                except queue.Empty:
+                    break
             await asyncio.sleep(retry)
             retry = min(retry * 2, 30)
-            play_task = asyncio.create_task(play_audio())
+        except Exception as e:
+            logger.error("Unexpected error: %s. Retry %ds", e, retry)
+            if play_task:
+                play_task.cancel()
+            for t in [cap, snd, rcv]:
+                try:
+                    t.cancel()
+                except Exception:
+                    pass
+            while not audio_tx_queue.empty():
+                try:
+                    audio_tx_queue.get_nowait()
+                except queue.Empty:
+                    break
+            await asyncio.sleep(retry)
+            retry = min(retry * 2, 30)
 
 
 if __name__ == "__main__":
