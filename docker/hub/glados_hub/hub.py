@@ -138,8 +138,6 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
             elif frame_type == 0x01 and session.is_listening:  # Audio chunk
                 session.audio_buffer.extend(payload)
                 session.last_speech_time = time.time()
-                logger.info("[%s] Received audio frame: %d bytes (buffer: %d)", device_id, len(payload), len(session.audio_buffer))
-
 
                 # Keep max 15s buffer
                 if len(session.audio_buffer) > 240000:  # 15s at 16kHz
@@ -154,7 +152,7 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
                     if session.last_speech_time > 0 and int(session.last_speech_time * 10) % 50 == 0:
                         logger.info("[%s] RMS: %.4f (speech_active=%s, silence=%d)", device_id, rms, session.speech_active, session.silence_count)
                     
-                    if rms > 0.005:  # Speech threshold (lowered for Whisplay HAT mic sensitivity)
+                    if rms > 0.002:  # Speech threshold (very low for Whisplay HAT mic)
                         if not session.speech_active:
                             session.speech_active = True
                         session.silence_count = 0
