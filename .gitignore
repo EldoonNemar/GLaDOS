@@ -27,3 +27,6 @@ Thumbs.db
 # Local config
 spokes/esp32-spoke/sdkconfig
 spokes/esp32-spoke/sdkconfig.old
+
+# PlatformIO build artifacts
+spokes/esp32-spoke/.pio/

@@ -1,8 +1,7 @@
-speechrecognition
 fastapi
 uvicorn[standard]
 numpy
 soundfile
 pydantic
-Kokoro-onnx
-vosk
+sherpa-onnx
+piper-tts
