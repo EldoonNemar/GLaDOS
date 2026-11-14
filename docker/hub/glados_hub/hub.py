@@ -152,7 +152,7 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
                     if session.last_speech_time > 0 and int(session.last_speech_time * 10) % 50 == 0:
                         logger.info("[%s] RMS: %.4f (speech_active=%s, silence=%d)", device_id, rms, session.speech_active, session.silence_count)
                     
-                    if rms > 0.008:  # Speech threshold - must be above noise floor
+                    if rms > 0.015:  # Speech threshold - above typical noise floor
                         if not session.speech_active:
                             session.speech_active = True
                         session.silence_count = 0
