@@ -123,6 +123,7 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
     try:
         while True:
             data = await websocket.receive_bytes()
+            logger.info("[%s] Received %d bytes (frame_type=%d)", device_id, len(data), data[0] if len(data) > 0 else 0)
             if len(data) == 0:
                 continue
             frame_type = data[0]
