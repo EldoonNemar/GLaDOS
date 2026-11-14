@@ -119,14 +119,14 @@ ctl.!default {{ type hw; card {card} }}
 def configure_asound_whisplay(card):
     """Configure ALSA for Whisplay HAT.
     
-    Simple config using the device name which works correctly.
+    Simple config using plughw for reliable format conversion.
     The 'default' pcm will be configured for capture at 16kHz mono.
     """
-    config = f"""# Use plughw:whisplaysound for automatic format conversion
+    config = f"""# Whisplay HAT ALSA configuration - 16kHz mono capture
 pcm.!default {{
     type plug
     slave {{
-        pcm "plughw:whisplaysound"
+        pcm "plughw:{card}"
         rate 16000
         channels 1
     }}
