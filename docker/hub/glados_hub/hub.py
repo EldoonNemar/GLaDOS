@@ -123,7 +123,6 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
     try:
         while True:
             data = await websocket.receive_bytes()
-            logger.info("[%s] Received %d bytes (frame_type=%d)", device_id, len(data), data[0] if len(data) > 0 else 0)
             if len(data) == 0:
                 continue
             frame_type = data[0]
@@ -156,6 +155,8 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
                         session.silence_count = 0
                     elif session.speech_active:
                         session.silence_count += 1
+                        if session.silence_count % 10 == 0:
+                            logger.info("[%s] SILENCE COUNT: %d", device_id, session.silence_count)
                         # Update per-speaker VAD states
                         for sid, sdata in session.speakers.items():
                             if sdata.get("speech_active", False):
