@@ -9,6 +9,16 @@ HUB_URL = os.environ.get("GLADOS_HUB_URL", "ws://localhost:5051")
 DEVICE_ID = os.environ.get("GLADOS_DEVICE_ID", "spoke-001")
 CHUNK_SIZE = 3200  # 1600 samples * 2 bytes
 
+# ── ALSA device configuration ──────────────────────────────────────
+# These can be overridden via environment variables, otherwise
+# setup_audio.py configures /etc/asound.conf to set defaults.
+
+CAPTURE_DEVICE = os.environ.get("GLADOS_CAPTURE_DEVICE", "default")
+PLAYBACK_DEVICE = os.environ.get("GLADOS_PLAYBACK_DEVICE", "default")
+
+logger.info("Audio config: capture=%s playback=%s", CAPTURE_DEVICE, PLAYBACK_DEVICE)
+
+
 async def play_audio():
     """Play TTS audio using aplay subprocess."""
     buffer = bytearray()
@@ -28,17 +38,22 @@ async def play_audio():
                     playback_proc.stdin.write(out)
                 else:
                     if playback_proc:
-                        try: playback_proc.wait(timeout=1)
-                        except: pass
+                        try:
+                            playback_proc.wait(timeout=1)
+                        except Exception:
+                            pass
                     playback_proc = await asyncio.create_subprocess_exec(
-                        "aplay", "-f", "S16_LE", "-r", "16000", "-D", "plughw:CARD=Array,DEV=0",
-                        stdin=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
+                        "aplay", "-f", "S16_LE", "-r", "16000",
+                        "-D", PLAYBACK_DEVICE,
+                        stdin=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.DEVNULL
                     )
                     playback_proc.stdin.write(out)
         elif frame_type == 0x13:
             logger.info("[STATUS] %s", data.rstrip(b'\x00').decode('utf-8', errors='ignore'))
         elif frame_type == 0x12:
             logger.info("[CONTROL] session ended")
+
 
 async def receive_audio(ws):
     """Receive WebSocket frames and route to queues."""
@@ -51,13 +66,16 @@ async def receive_audio(ws):
         elif frame_type in (0x12, 0x13):
             audio_queue.put_nowait((frame_type, payload))
 
+
 async def capture_audio(ws):
     """Capture audio using arecord."""
     proc = await asyncio.create_subprocess_exec(
-        "arecord", "-f", "S16_LE", "-r", "16000", "-c", "1", "-t", "raw", "-D", "plughw:CARD=Array,DEV=0",
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
+        "arecord", "-f", "S16_LE", "-r", "16000", "-c", "1", "-t", "raw",
+        "-D", CAPTURE_DEVICE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL
     )
-    logger.info("arecord started: %d", proc.pid)
+    logger.info("arecord started (%d): %s", proc.pid, CAPTURE_DEVICE)
     buf = bytearray()
     chunk_count = 0
     try:
@@ -83,16 +101,19 @@ async def capture_audio(ws):
         proc.terminate()
         await proc.wait()
 
+
 async def send_audio(ws):
     """Send audio to hub."""
     while True:
         frame = await asyncio.get_event_loop().run_in_executor(None, audio_tx_queue.get)
         await ws.send(frame)
 
+
 TTS_CHUNK = int(24000 * 0.2 * 2)
 audio_queue = asyncio.Queue()
 audio_tx_queue = queue.Queue()
 playback_proc = None
+
 
 async def main():
     logger.info("GLaDOS Spoke starting... Hub=%s Device=%s", HUB_URL, DEVICE_ID)
@@ -115,11 +136,14 @@ async def main():
             logger.error("Lost: %s. Retry %ds", e, retry)
             play_task.cancel()
             for t in [cap, snd, rcv]:
-                try: t.cancel()
-                except: pass
+                try:
+                    t.cancel()
+                except Exception:
+                    pass
             await asyncio.sleep(retry)
             retry = min(retry * 2, 30)
             play_task = asyncio.create_task(play_audio())
+
 
 if __name__ == "__main__":
     try:

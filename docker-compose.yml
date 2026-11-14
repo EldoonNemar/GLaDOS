@@ -51,8 +51,11 @@ services:
       - "5052:8081"
     volumes:
       - ./models:/models
+      - /opt/rocm/core-10.1/lib:/opt/rocm/lib:ro
     environment:
       - HIP_VISIBLE_DEVICES=0
+      - LD_LIBRARY_PATH=/opt/rocm/lib
+      - ROCM_VERSION=10.1.0
       - MODEL_DIR=/models
       - HF_TOKEN=${HF_TOKEN}
     networks:
@@ -84,6 +87,9 @@ services:
       jigowatts_default:
 
   # ── Python Spoke (optional -- laptop/RPi) ─────────────────────────
+  # Set GLADOS_AUDIO_DEVICE=xvf3800 or GLADOS_AUDIO_DEVICE=whisplay
+  # to pin to a specific device. Auto-detection tries XVF3800 first,
+  # then Whisplay HAT.
   glados_spoke:
     profiles: ["spoke"]
     build:
@@ -97,6 +103,7 @@ services:
     environment:
       - GLADOS_HUB_URL=ws://glados_hub:5051
       - GLADOS_DEVICE_ID=python-spoke-001
+      - GLADOS_AUDIO_DEVICE=whisplay
 
 networks:
   glados:
