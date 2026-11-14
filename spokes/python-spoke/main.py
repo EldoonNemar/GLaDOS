@@ -16,16 +16,11 @@ HUB_URL = os.environ.get("GLADOS_HUB_URL", "ws://localhost:5051")
 DEVICE_ID = os.environ.get("GLADOS_DEVICE_ID", "spoke-001")
 CHUNK_SIZE = 3200  # 1600 samples * 2 bytes
 
-# ── Noise suppressor ────────────────────────────────────────────────
-if NS_AVAILABLE:
-    try:
-        _ns = pyrnnoise.RNNoise(sample_rate=16000)
-        logger.info("RNNoise noise suppression initialized")
-    except Exception as e:
-        logger.warning("Failed to init RNNoise: %s - no noise suppression", e)
-        _ns = None
-else:
-    _ns = None
+# ── Noise suppressor (disabled - API issues) ────────────────────────
+# pyrnnoise API compatibility issues on ARM64
+# Re-enable when a working version is found
+_NS_AVAILABLE = False
+_ns = None
 
 # ── ALSA device configuration ──────────────────────────────────────
 # These can be overridden via environment variables, otherwise
