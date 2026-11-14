@@ -139,16 +139,17 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
                 session.audio_buffer.extend(payload)
                 session.last_speech_time = time.time()
 
+
                 # Keep max 15s buffer
                 if len(session.audio_buffer) > 240000:  # 15s at 16kHz
                     session.audio_buffer = session.audio_buffer[-240000:]
                 
-                # VAD: check energy on last 3200 samples (200ms)
-                if len(session.audio_buffer) >= 3200:
-                    recent = np.frombuffer(bytes(session.audio_buffer[-3200:]), dtype=np.int16).astype(np.float64)
+                # VAD: check energy on last 1600 samples (100ms)
+                if len(session.audio_buffer) >= 1600:
+                    recent = np.frombuffer(bytes(session.audio_buffer[-1600:]), dtype=np.int16).astype(np.float64)
                     rms = np.sqrt(np.mean(recent**2)) / 32768.0
                     
-                    if rms > 0.015:  # Speech threshold - above typical noise floor
+                    if rms > 0.015:  # Speech
                         if not session.speech_active:
                             session.speech_active = True
                         session.silence_count = 0
@@ -164,20 +165,17 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
                                 sdata["silence_count"] = 0
                         
                         if session.silence_count >= 20:  # Global 2.0s silence (wait for complete sentences)
-                            logger.info("[%s] Silence detected! Sending to ASR (buffer: %d bytes)", device_id, len(session.audio_buffer))
                             try:
                                 # 1. Voice fingerprint for this segment
                                 speaker_id = session.fingerprint_voice(bytes(session.audio_buffer))
                                 
                                 # 2. Transcribe
                                 audio_b64 = base64.b64encode(bytes(session.audio_buffer)).decode()
-                                logger.info("[%s] Sending %d bytes to ASR...", device_id, len(session.audio_buffer))
                                 asr_resp = await http_client.post(
                                     f"{ENGINE_URL}/asr",
                                     json={"audio_base64": audio_b64, "sample_rate": 16000},
                                 )
                                 text = asr_resp.json().get("text", "").strip()
-                                logger.info("[%s] ASR response: '%s'", device_id, text[:100])
                                 
                                 # 3. Add to speaker context + conversation history
                                 session.add_speech_to_context(speaker_id, text)
