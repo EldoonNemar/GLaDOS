@@ -117,41 +117,21 @@ ctl.!default {{ type hw; card {card} }}
 
 
 def configure_asound_whisplay(card):
-    """Configure ALSA for Whisplay HAT (48kHz stereo → 16kHz mono).
-
-    The WM8960 on the Whisplay HAT natively runs at 48kHz stereo.
-    We use a route+plug chain to convert to 16kHz mono for voice.
+    """Configure ALSA for Whisplay HAT.
+    
+    Simple config using the device name which works correctly.
+    The 'default' pcm will be configured for capture at 16kHz mono.
     """
-    config = f"""# Whisplay HAT: route stereo to mono, then resample
-pcm.whisplay_stereo_to_mono {{
-    type route
-    slave {{
-        pcm "hw:{card},0"
-        channels 2
-    }}
-    ttable.0.0 0.5
-    ttable.1.0 0.5
-}}
-
-pcm.whisplay_capture {{
+    config = f"""# Use plughw:whisplaysound for automatic format conversion
+pcm.!default {{
     type plug
     slave {{
-        pcm "whisplay_stereo_to_mono"
+        pcm "plughw:whisplaysound"
         rate 16000
         channels 1
     }}
 }}
 
-pcm.whisplay_playback {{
-    type plug
-    slave {{
-        pcm "hw:{card},0"
-        rate 16000
-        channels 2
-    }}
-}}
-
-pcm.!default {{ type plug; slave.pcm "whisplay_capture" }}
 ctl.!default {{ type hw; card {card} }}
 """
     with open('/etc/asound.conf', 'w') as f:
@@ -202,8 +182,12 @@ def select_hardware():
 
 def start_spoke(hw_type, card):
     """Set environment variables for main.py and exec into it."""
-    os.environ['GLADOS_CAPTURE_DEVICE'] = f'plughw:{card},0'
-    os.environ['GLADOS_PLAYBACK_DEVICE'] = f'plughw:{card},0'
+    if hw_type == 'whisplay':
+        os.environ['GLADOS_CAPTURE_DEVICE'] = 'plughw:whisplaysound'
+        os.environ['GLADOS_PLAYBACK_DEVICE'] = 'plughw:whisplaysound'
+    elif hw_type == 'xvf3800':
+        os.environ['GLADOS_CAPTURE_DEVICE'] = f'plughw:{card},0'
+        os.environ['GLADOS_PLAYBACK_DEVICE'] = f'plughw:{card},0'
     os.environ['GLADOS_HW_TYPE'] = hw_type
     os.execvp('python', ['python', '/app/main.py'])
 
