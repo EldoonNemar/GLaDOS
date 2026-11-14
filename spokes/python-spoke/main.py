@@ -2,12 +2,26 @@ import asyncio, logging, os, queue
 import numpy as np
 import websockets
 
+try:
+    import pyrnnoise
+    NS_AVAILABLE = True
+except ImportError:
+    NS_AVAILABLE = False
+    logging.warning("pyrnnoise not available - no noise suppression")
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger("glados_spoke")
 
 HUB_URL = os.environ.get("GLADOS_HUB_URL", "ws://localhost:5051")
 DEVICE_ID = os.environ.get("GLADOS_DEVICE_ID", "spoke-001")
 CHUNK_SIZE = 3200  # 1600 samples * 2 bytes
+
+# ── Noise suppressor ────────────────────────────────────────────────
+if NS_AVAILABLE:
+    _ns = pyrnnoise.RNNoise.create()
+    logger.info("RNNoise noise suppression initialized")
+else:
+    _ns = None
 
 # ── ALSA device configuration ──────────────────────────────────────
 # These can be overridden via environment variables, otherwise
@@ -68,7 +82,7 @@ async def receive_audio(ws):
 
 
 async def capture_audio(ws):
-    """Capture audio using arecord."""
+    """Capture audio using arecord, apply noise suppression."""
     proc = await asyncio.create_subprocess_exec(
         "arecord", "-f", "S16_LE", "-r", "16000", "-c", "1", "-t", "raw",
         "-D", CAPTURE_DEVICE,
@@ -87,6 +101,13 @@ async def capture_audio(ws):
             while len(buf) >= CHUNK_SIZE:
                 chunk = bytes(buf[:CHUNK_SIZE])
                 buf = buf[CHUNK_SIZE:]
+                
+                # Apply noise suppression if available
+                if _ns is not None:
+                    raw = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32768.0
+                    cleaned = _ns.process(raw)
+                    chunk = (cleaned * 32768.0).astype(np.int16).tobytes()
+                
                 rms = np.sqrt(np.mean(np.frombuffer(chunk, dtype=np.int16).astype(np.float64)**2))
                 chunk_count += 1
                 if chunk_count % 20 == 0:

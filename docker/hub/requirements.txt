@@ -3,4 +3,3 @@ uvicorn[standard]
 websockets
 httpx
 numpy
-onnxruntime

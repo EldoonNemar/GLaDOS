@@ -18,18 +18,9 @@ import os
 import time
 import uuid
 from pathlib import Path
-import struct
 
 import httpx
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
-
-try:
-    import onnxruntime as ort
-    HAS_ONNX = True
-except ImportError:
-    HAS_ONNX = False
-    logger = logging.getLogger("glados_hub")
-    logger.warning("onnxruntime not available - falling back to energy-based VAD")
 
 MAX_CONTEXT_WORDS = 200
 WAKE_WORDS = ["glados", "gladys", "glahdose", "hey glados", "hey gladys", "hey glahdose"]
@@ -48,70 +39,6 @@ with open(PROMPT_PATH) as f:
     SYSTEM_PROMPT = f.read()
 
 logger.info("GLaDOS system prompt loaded (%d chars)", len(SYSTEM_PROMPT))
-
-# ── Silero VAD ────────────────────────────────────────────────────────
-VAD_MODEL_PATH = Path("/models/ASR/silero_vad_16k_op15.onnx")
-
-class SileroVADSession:
-    """Silero VAD with per-session hidden states, falls back to energy-based."""
-    def __init__(self):
-        if not HAS_ONNX or not VAD_MODEL_PATH.exists():
-            self._enabled = False
-            self._session = None
-            self._energy = EnergyBasedVAD(threshold=0.012)
-        else:
-            try:
-                self._session = ort.InferenceSession(
-                    str(VAD_MODEL_PATH),
-                    providers=["CPUExecutionProvider"],
-                )
-                # Model inputs: 'input', 'state', 'sr' — outputs: 'output', 'stateN'
-                self._state = np.zeros((2, 1, 128), dtype=np.float32)
-                self._enabled = True
-                self._energy = None
-                logger.info("Silero VAD loaded from %s", VAD_MODEL_PATH)
-            except Exception as e:
-                logger.warning("Failed to load Silero VAD: %s - using energy fallback", e)
-                self._session = None
-                self._enabled = False
-                self._energy = EnergyBasedVAD(threshold=0.012)
-
-    def is_active(self):
-        return self._enabled
-
-    def check_speech(self, audio_chunk: np.ndarray) -> tuple:
-        """
-        Check if *audio_chunk* (int16, 16 kHz mono) contains speech.
-        Returns (is_speech: bool, vad_metric: float).
-        """
-        if self._enabled and self._session is not None:
-            audio = audio_chunk.astype(np.float32) / 32768.0
-            ort_inputs = {
-                "input": audio.reshape(1, -1),
-                "sr": np.array(16000, dtype=np.int64),
-                "state": self._state,
-            }
-            outputs, self._state = self._session.run(None, ort_inputs)
-            prob = float(outputs[0][0][0])
-            return prob > 0.5, prob
-        # Energy-based fallback
-        is_speech, rms = self._energy.check_speech(audio_chunk)
-        return is_speech, rms
-
-
-class EnergyBasedVAD:
-    """Fallback energy-based VAD when Silero is unavailable."""
-    def __init__(self, threshold=0.012):
-        self._threshold = threshold
-        self._speech_active = False
-
-    def check_speech(self, audio_chunk: np.ndarray) -> tuple:
-        rms = np.sqrt(np.mean(audio_chunk.astype(np.float64) ** 2)) / 32768.0
-        is_speech = rms > self._threshold
-        if is_speech:
-            self._speech_active = True
-        return is_speech, rms * 32768.0  # return raw rms for logging
-
 
 app = FastAPI(title="GLaDOS Hub", version="0.1.0")
 active_sessions: dict = {}
@@ -134,7 +61,6 @@ class GLaDOSConversation:
         self.current_speaker_id: str = None
         self.silence_count: int = 0  # Global silence
         self.speech_active: bool = False
-        self.vad_session = SileroVADSession()  # Silero VAD or energy fallback
         self.interrupting: bool = False
         # Shared conversation memory
         self.conversation_history: list = []
@@ -218,19 +144,19 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
                 if len(session.audio_buffer) > 240000:  # 15s at 16kHz
                     session.audio_buffer = session.audio_buffer[-240000:]
                 
-                # VAD: use Silero VAD (or energy fallback) on last 1600 samples (100ms)
+                # VAD: check energy on last 1600 samples (100ms)
                 if len(session.audio_buffer) >= 1600:
-                    chunk = np.frombuffer(bytes(session.audio_buffer[-1600:]), dtype=np.int16)
-                    is_speech, vad_metric = session.vad_session.check_speech(chunk)
+                    recent = np.frombuffer(bytes(session.audio_buffer[-1600:]), dtype=np.int16).astype(np.float64)
+                    rms = np.sqrt(np.mean(recent**2)) / 32768.0
                     
-                    if is_speech:
+                    if rms > 0.003:  # Speech threshold - lowered for Whisplay HAT noise floor
                         if not session.speech_active:
                             session.speech_active = True
                         session.silence_count = 0
                     elif session.speech_active:
                         session.silence_count += 1
                         if session.silence_count % 10 == 0:
-                            logger.info("[%s] SILENCE COUNT: %d (vad=%.4f)", device_id, session.silence_count, vad_metric)
+                            logger.info("[%s] SILENCE COUNT: %d", device_id, session.silence_count)
                         # Update per-speaker VAD states
                         for sid, sdata in session.speakers.items():
                             if sdata.get("speech_active", False):
