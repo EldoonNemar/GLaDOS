@@ -1,5 +1,6 @@
 import re
 import numpy as np
+import struct
 """
 glados_hub - WebSocket hub + LLM/TTS orchestrator.
 
@@ -40,6 +41,29 @@ with open(PROMPT_PATH) as f:
 
 logger.info("GLaDOS system prompt loaded (%d chars)", len(SYSTEM_PROMPT))
 
+# ── WAV file saver for debugging ────────────────────────────────────
+def save_wav(filename: str, audio_bytes: bytes, sample_rate: int = 16000):
+    """Save raw 16-bit PCM audio as WAV file."""
+    try:
+        samples = np.frombuffer(audio_bytes, dtype=np.int16)
+        with open(filename, 'wb') as f:
+            f.write(b'RIFF')
+            f.write(struct.pack('<I', 36 + len(audio_bytes)))
+            f.write(b'WAVE')
+            f.write(b'fmt ')
+            f.write(struct.pack('<I', 16))
+            f.write(struct.pack('<H', 1))
+            f.write(struct.pack('<H', 1))
+            f.write(struct.pack('<I', sample_rate))
+            f.write(struct.pack('<I', sample_rate * 2))
+            f.write(struct.pack('<H', 2))
+            f.write(struct.pack('<H', 16))
+            f.write(b'data')
+            f.write(struct.pack('<I', len(audio_bytes)))
+            f.write(audio_bytes)
+        logger.info("Saved debug WAV: %s (%d samples)", filename, len(samples))
+    except Exception as e:
+        logger.error("WAV save failed: %s", e)
 app = FastAPI(title="GLaDOS Hub", version="0.1.0")
 active_sessions: dict = {}
 http_client = httpx.AsyncClient(timeout=120.0)
@@ -138,7 +162,8 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
             elif frame_type == 0x01 and session.is_listening:  # Audio chunk
                 session.audio_buffer.extend(payload)
                 session.last_speech_time = time.time()
-                logger.info("[%s] Audio frame: %d bytes (buffer: %d)", device_id, len(payload), len(session.audio_buffer))
+                # Verbose logging disabled - uncomment for debugging
+                # logger.info("[%s] Audio frame: %d bytes (buffer: %d)", device_id, len(payload), len(session.audio_buffer))
 
 
                 # Keep max 15s buffer
@@ -149,8 +174,8 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
                 if len(session.audio_buffer) >= 1600:
                     recent = np.frombuffer(bytes(session.audio_buffer[-1600:]), dtype=np.int16).astype(np.float64)
                     rms = np.sqrt(np.mean(recent**2)) / 32768.0
-                    logger.info("[%s] VAD rms=%.6f (threshold=0.008, speech=%s, silence=%d)", 
-                               device_id, rms, session.speech_active, session.silence_count)
+                    # Debug: logger.info("[%s] VAD rms=%.6f (speech=%s, silence=%d)",
+                    #            device_id, rms, session.speech_active, session.silence_count)
                     
                     if rms > 0.010:  # Speech threshold - raised for Whisplay HAT (speech ~0.017, noise ~0.006-0.010)
                         if not session.speech_active:
@@ -171,6 +196,10 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
                         
                         if session.silence_count >= 20:  # Global 2.0s silence (wait for complete sentences)
                             logger.info("[%s] *** SILENCE COUNT REACHED %d, sending to ASR ***", device_id, session.silence_count)
+                            # Save debug WAV
+                            ts = time.strftime("%Y%m%d_%H%M%S")
+                            save_wav(f"/tmp/audio_debug_{ts}.wav", bytes(session.audio_buffer))
+                            
                             try:
                                 # 1. Voice fingerprint for this segment
                                 speaker_id = session.fingerprint_voice(bytes(session.audio_buffer))
