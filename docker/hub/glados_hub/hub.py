@@ -177,7 +177,6 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
                 session.audio_buffer.clear()
                 logger.info("[%s] Session ended", device_id)
             elif frame_type == 0x01 and session.is_listening:  # Audio chunk
-                logger.info("[%s] Audio chunk: %d bytes, first10=%s", device_id, len(payload), list(payload[:10]))
                 session.audio_buffer.extend(payload)
                 session.last_speech_time = time.time()
                 # Verbose logging disabled - uncomment for debugging

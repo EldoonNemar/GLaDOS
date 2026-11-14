@@ -110,14 +110,8 @@ async def capture_audio(ws):
                     except Exception as e:
                         logger.error("[NS] Error: %s, sending raw", e)
                 
-                # Debug: log first 10 bytes of each chunk
-                if chunk_count % 100 == 0:
-                    logger.info("[TX] chunk=%d first10=%s", chunk_count, list(chunk[:10]))
-                
                 rms = np.sqrt(np.mean(np.frombuffer(chunk, dtype=np.int16).astype(np.float64)**2))
                 chunk_count += 1
-                if chunk_count % 20 == 0:
-                    logger.info("[LISTENING] %.2f RMS (%d)", rms, chunk_count)
                 try:
                     audio_tx_queue.put_nowait(bytes([0x01]) + chunk)
                 except queue.Full:

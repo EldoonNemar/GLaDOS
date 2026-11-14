@@ -192,6 +192,15 @@ def verify_capture(device):
         return False
 
 
+def set_mic_gain():
+    """Set Whisplay HAT mic gain to maximum for better capture quality."""
+    result = subprocess.run(
+        ['amixer', '-c', 'whisplaysound', 'cset', 'name=mic', '100'],
+        capture_output=True, text=True, timeout=5
+    )
+    print(f"Mic gain set: {result.stdout.strip()}")
+
+
 def select_hardware():
     """Detect available hardware and return (hw_type, card_index)."""
     hw_env = os.environ.get('GLADOS_AUDIO_DEVICE', '').strip().lower()
@@ -261,6 +270,7 @@ def main():
     elif hw_type == 'whisplay':
         configure_asound_whisplay(card)
         verify_capture(f'plughw:{card},0')
+        set_mic_gain()
     elif hw_type == 'generic':
         configure_asound_generic(card)
         verify_capture(f'plughw:{card},0')
