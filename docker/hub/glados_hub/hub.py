@@ -148,10 +148,6 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
                     recent = np.frombuffer(bytes(session.audio_buffer[-3200:]), dtype=np.int16).astype(np.float64)
                     rms = np.sqrt(np.mean(recent**2)) / 32768.0
                     
-                    # Debug: log RMS values occasionally
-                    if session.last_speech_time > 0 and int(session.last_speech_time * 10) % 50 == 0:
-                        logger.info("[%s] RMS: %.4f (speech_active=%s, silence=%d)", device_id, rms, session.speech_active, session.silence_count)
-                    
                     if rms > 0.015:  # Speech threshold - above typical noise floor
                         if not session.speech_active:
                             session.speech_active = True
