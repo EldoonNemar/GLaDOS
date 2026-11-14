@@ -383,8 +383,7 @@ Answer: """
             },
         )
         result = resp.json()["choices"][0]["message"]["content"].strip().upper()
-        # TEMP: Force YES for testing - remove when wake word flow is working
-        return True
+        logger.info("[%s] _should_glados_respond LLM returned: '%s' -> %s", device_id, result, "YES" in result)
         return "YES" in result
     except Exception as e:
         logger.warning("Intent check failed: %s", e)
