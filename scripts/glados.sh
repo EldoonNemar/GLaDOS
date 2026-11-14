@@ -81,7 +81,7 @@ case "$ACTION" in
             echo "[glados] Building spoke..."
             # Use spoke-only compose file if available (Orange Pi / arm64)
             if [[ -f "docker/docker-compose-spoke.yml" ]]; then
-                docker compose -f docker/docker-compose-spoke.yml build glados_spoke
+                cd docker && docker compose -f docker-compose-spoke.yml build glados_spoke && cd ..
             else
                 docker compose build glados_spoke
             fi

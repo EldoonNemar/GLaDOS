@@ -1,9 +1,10 @@
 version: '3.8'
+
 services:
   glados_spoke:
     profiles: ["spoke"]
     build:
-      context: .
+      context: ..
       dockerfile: spokes/python-spoke/Dockerfile
     container_name: glados_spoke
     restart: unless-stopped
