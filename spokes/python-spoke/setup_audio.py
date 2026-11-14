@@ -98,6 +98,25 @@ def find_whisplay_hat():
     return None
 
 
+def find_generic_audio():
+    """Find generic HD-Audio capture device (ALC1220, etc)."""
+    cards = list_alsa_cards()
+    if not cards:
+        return None
+    for idx, name, long_name in cards:
+        combined = f"{name} {long_name}".lower()
+        if ('hd-audio' in combined or 'hd audio' in combined) and 'generic' in combined:
+            # Verify it has an Analog capture device
+            result = subprocess.run(
+                ['arecord', '-l'],
+                capture_output=True, text=True, timeout=5
+            )
+            for line in result.stdout.splitlines():
+                if f'card {idx}:' in line and 'Analog' in line:
+                    return idx
+    return None
+
+
 def configure_asound_xvf3800(card):
     """Configure ALSA for XVF3800 capture (16 kHz mono)."""
     config = f"""pcm.xvf3800_capture {{
@@ -139,6 +158,25 @@ ctl.!default {{ type hw; card {card} }}
     print(f"ALSA configured: Whisplay HAT card={card}")
 
 
+def configure_asound_generic(card):
+    """Configure ALSA for generic HD-Audio capture (ALC1220, etc)."""
+    config = f"""# Generic HD-Audio ALSA configuration - 16kHz mono capture
+pcm.!default {{
+    type plug
+    slave {{
+        pcm "plughw:{card},0"
+        rate 16000
+        channels 1
+    }}
+}}
+
+ctl.!default {{ type hw; card {card} }}
+"""
+    with open('/etc/asound.conf', 'w') as f:
+        f.write(config)
+    print(f"ALSA configured: Generic HD-Audio card={card}")
+
+
 def verify_capture(device):
     """Test that audio capture works on the given device."""
     result = subprocess.run(
@@ -168,7 +206,7 @@ def select_hardware():
             return ('whisplay', card)
         print(f"WARNING: GLADOS_AUDIO_DEVICE=whisplay but Whisplay HAT not found")
     
-    # Auto-detect: prefer XVF3800, then Whisplay
+    # Auto-detect: prefer XVF3800, then Whisplay, then Generic
     xvf_card = find_xvf3800()
     if xvf_card is not None:
         return ('xvf3800', xvf_card)
@@ -176,6 +214,11 @@ def select_hardware():
     whisp_card = find_whisplay_hat()
     if whisp_card is not None:
         return ('whisplay', whisp_card)
+    
+    # Fallback: generic HD-Audio
+    generic_card = find_generic_audio()
+    if generic_card is not None:
+        return ('generic', generic_card)
     
     return (None, None)
 
@@ -186,6 +229,9 @@ def start_spoke(hw_type, card):
         os.environ['GLADOS_CAPTURE_DEVICE'] = 'plughw:whisplaysound'
         os.environ['GLADOS_PLAYBACK_DEVICE'] = 'plughw:whisplaysound'
     elif hw_type == 'xvf3800':
+        os.environ['GLADOS_CAPTURE_DEVICE'] = f'plughw:{card},0'
+        os.environ['GLADOS_PLAYBACK_DEVICE'] = f'plughw:{card},0'
+    elif hw_type == 'generic':
         os.environ['GLADOS_CAPTURE_DEVICE'] = f'plughw:{card},0'
         os.environ['GLADOS_PLAYBACK_DEVICE'] = f'plughw:{card},0'
     os.environ['GLADOS_HW_TYPE'] = hw_type
@@ -214,6 +260,9 @@ def main():
         verify_capture(f'plughw:{card},0')
     elif hw_type == 'whisplay':
         configure_asound_whisplay(card)
+        verify_capture(f'plughw:{card},0')
+    elif hw_type == 'generic':
+        configure_asound_generic(card)
         verify_capture(f'plughw:{card},0')
     start_spoke(hw_type, card)
 
