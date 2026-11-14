@@ -150,6 +150,10 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
                     recent = np.frombuffer(bytes(session.audio_buffer[-1600:]), dtype=np.int16).astype(np.float64)
                     rms = np.sqrt(np.mean(recent**2)) / 32768.0
                     
+                    # Debug VAD every 50 frames
+                    if len(session.audio_buffer) % 160000 < 3200:
+                        logger.info("[%s] VAD check: rms=%.4f, threshold=0.015", device_id, rms)
+                    
                     if rms > 0.015:  # Speech
                         if not session.speech_active:
                             session.speech_active = True
