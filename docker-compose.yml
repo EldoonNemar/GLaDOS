@@ -86,24 +86,35 @@ services:
       glados:
       jigowatts_default:
 
-  # ── Python Spoke (optional -- laptop/RPi) ─────────────────────────
-  # Set GLADOS_AUDIO_DEVICE=xvf3800 or GLADOS_AUDIO_DEVICE=whisplay
-  # to pin to a specific device. Auto-detection tries XVF3800 first,
-  # then Whisplay HAT.
-  glados_spoke:
-    profiles: ["spoke"]
-    build:
-      context: .
-      dockerfile: spokes/python-spoke/Dockerfile
-    container_name: glados_spoke
-    restart: unless-stopped
-    network_mode: host
-    devices:
-      - "/dev/snd:/dev/snd"
-    environment:
-      - GLADOS_HUB_URL=ws://glados_hub:5051
-      - GLADOS_DEVICE_ID=python-spoke-001
-      - GLADOS_AUDIO_DEVICE=whisplay
+  # ── Python Spoke (optional) ──────────────────────────────────────
+  # NOTE: Do NOT run this on the hub machine. Deploy separately on
+  # the audio device (Jetson Nano, RPi, etc.) that has the microphone/speaker.
+  #
+  # Example deployment on the audio device:
+  #   docker run -d --name glados_spoke --network host \
+  #     --device /dev/snd:/dev/snd \
+  #     -e GLADOS_HUB_URL=ws://<HUB_IP>:5051 \
+  #     -e GLADOS_DEVICE_ID=spoke-001 \
+  #     -e GLADOS_AUDIO_DEVICE=whisplay \
+  #     glados-glados_spoke:latest
+  #
+  # glados_spoke is disabled here to avoid conflicts.
+  # To re-enable, uncomment below and run: docker compose --profile spoke up -d
+  #
+  # glados_spoke:
+  #   profiles: ["spoke"]
+  #   build:
+  #     context: .
+  #     dockerfile: spokes/python-spoke/Dockerfile
+  #   container_name: glados_spoke
+  #   restart: unless-stopped
+  #   network_mode: host
+  #   devices:
+  #     - "/dev/snd:/dev/snd"
+  #   environment:
+  #     - GLADOS_HUB_URL=ws://glados_hub:5051
+  #     - GLADOS_DEVICE_ID=python-spoke-001
+  #     - GLADOS_AUDIO_DEVICE=whisplay
 
 networks:
   glados:
