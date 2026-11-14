@@ -152,7 +152,7 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
                     if session.last_speech_time > 0 and int(session.last_speech_time * 10) % 50 == 0:
                         logger.info("[%s] RMS: %.4f (speech_active=%s, silence=%d)", device_id, rms, session.speech_active, session.silence_count)
                     
-                    if rms > 0.002:  # Speech threshold (very low for Whisplay HAT mic)
+                    if rms > 0.008:  # Speech threshold - must be above noise floor
                         if not session.speech_active:
                             session.speech_active = True
                         session.silence_count = 0
@@ -168,6 +168,7 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
                                 sdata["silence_count"] = 0
                         
                         if session.silence_count >= 20:  # Global 2.0s silence (wait for complete sentences)
+                            logger.info("[%s] Silence detected! Sending to ASR (buffer: %d bytes)", device_id, len(session.audio_buffer))
                             try:
                                 # 1. Voice fingerprint for this segment
                                 speaker_id = session.fingerprint_voice(bytes(session.audio_buffer))
