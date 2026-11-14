@@ -138,6 +138,7 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
             elif frame_type == 0x01 and session.is_listening:  # Audio chunk
                 session.audio_buffer.extend(payload)
                 session.last_speech_time = time.time()
+                logger.info("[%s] Audio frame: %d bytes (buffer: %d)", device_id, len(payload), len(session.audio_buffer))
 
 
                 # Keep max 15s buffer
