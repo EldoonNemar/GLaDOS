@@ -66,7 +66,7 @@ class SileroVADSession:
                     providers=["CPUExecutionProvider"],
                 )
                 # Model inputs: 'input', 'state', 'sr' — outputs: 'output', 'stateN'
-                self._state = np.zeros((2, 1, 64), dtype=np.float32)
+                self._state = np.zeros((2, 1, 128), dtype=np.float32)
                 self._enabled = True
                 self._energy = None
                 logger.info("Silero VAD loaded from %s", VAD_MODEL_PATH)
