@@ -64,10 +64,27 @@ def save_wav(filename: str, audio_bytes: bytes, sample_rate: int = 16000):
         logger.info("Saved debug WAV: %s (%d samples)", filename, len(samples))
     except Exception as e:
         logger.error("WAV save failed: %s", e)
+
+
+async def _save_periodic_wav():
+    """Save last 5s of audio every 10s for debugging."""
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    while True:
+        await asyncio.sleep(10)
+        for dev_id, sess in active_sessions.items():
+            if sess.audio_buffer and len(sess.audio_buffer) >= 1600:
+                fname = f"/tmp/audio_debug_{dev_id}_{ts}.wav"
+                save_wav(fname, bytes(sess.audio_buffer[-80000:]))
+
+
 app = FastAPI(title="GLaDOS Hub", version="0.1.0")
 active_sessions: dict = {}
 http_client = httpx.AsyncClient(timeout=120.0)
 
+@app.on_event("startup")
+async def _startup():
+    asyncio.create_task(_save_periodic_wav())
+    logger.info("Started periodic WAV saver (debug)")
 
 class GLaDOSConversation:
     MAX_WORDS = 300
