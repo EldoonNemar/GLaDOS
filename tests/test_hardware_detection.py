@@ -1,60 +1,64 @@
-"""Tests for hardware detection in setup_audio.py.
-
-Tests the detection logic for XVF3800 and Whisplay HAT
-without requiring actual hardware.
-"""
+"""Tests for hardware detection in setup_audio.py."""
 import sys
 import os
 import unittest
-from unittest.mock import patch, mock_open
+from unittest.mock import patch, MagicMock
 
-# Add the spokes directory to the path so we can import setup_audio
 sys.path.insert(0, '/opt/GLaDOS/spokes/python-spoke')
 import setup_audio
 
 
-class TestListAlsaCards(unittest.TestCase):
-    """Tests for list_alsa_cards parsing.
-    
-    /proc/asound/cards format:
-      0 [HDMI_1]: HDA-Intel - HDA ATI HDMI
-                ^^^^^  ^^^^^^^^^^^^^^^^^^^^^^
-                name   long_name
-    """
+class TestParseArecordList(unittest.TestCase):
+    """Tests for arecord -l parsing."""
 
-    def test_parse_single_card(self):
-        cards_content = "  0 [HDMI_1]: HDA-Intel - HDA ATI HDMI\n"
-        with patch('builtins.open', mock_open(read_data=cards_content)):
-            cards = setup_audio.list_alsa_cards()
+    def test_parse_single_device(self):
+        mock_result = MagicMock()
+        mock_result.stdout = "card 3: whisplaysound [Whisplay Sound], device 0: Whisplay HiFi wm8960-hifi-0 [Whisplay HiFi wm8960-hifi-0]\n"
+        with patch('subprocess.run', return_value=mock_result):
+            cards = setup_audio._parse_arecord_list()
         self.assertEqual(len(cards), 1)
-        self.assertEqual(cards[0], (0, "HDMI_1", "HDA-Intel - HDA ATI HDMI"))
+        self.assertEqual(cards[0], (3, 'whisplaysound', 'Whisplay Sound'))
 
-    def test_parse_multiple_cards(self):
-        cards_content = """  0 [HDMI_1]: HDA-Intel - HDA ATI HDMI
-  1 [Generic]: HDA-Intel - HD-Audio Generic
-  3 [whisplaysound]: Whisplay Sound - Whisplay HiFi wm8960-hifi-0
+    def test_parse_multiple_devices(self):
+        mock_result = MagicMock()
+        mock_result.stdout = """**** List of CAPTURE Hardware Devices ****
+card 2: ahubhdmi [ahubhdmi], device 0: ahub_plat-i2s-hifi i2s-hifi-0 [ahub_plat-i2s-hifi i2s-hifi-0]
+card 3: whisplaysound [Whisplay Sound], device 0: Whisplay HiFi wm8960-hifi-0 [Whisplay HiFi wm8960-hifi-0]
 """
-        with patch('builtins.open', mock_open(read_data=cards_content)):
-            cards = setup_audio.list_alsa_cards()
-        self.assertEqual(len(cards), 3)
-        self.assertEqual(cards[0], (0, "HDMI_1", "HDA-Intel - HDA ATI HDMI"))
-        self.assertEqual(cards[2], (3, "whisplaysound", "Whisplay Sound - Whisplay HiFi wm8960-hifi-0"))
+        with patch('subprocess.run', return_value=mock_result):
+            cards = setup_audio._parse_arecord_list()
+        self.assertEqual(len(cards), 2)
+        self.assertEqual(cards[0], (2, 'ahubhdmi', 'ahubhdmi'))
+        self.assertEqual(cards[1], (3, 'whisplaysound', 'Whisplay Sound'))
 
-    def test_parse_empty_file(self):
-        with patch('builtins.open', mock_open(read_data="")):
-            cards = setup_audio.list_alsa_cards()
-        self.assertEqual(cards, [])
+    def test_empty_output(self):
+        mock_result = MagicMock()
+        mock_result.stdout = ""
+        with patch('subprocess.run', return_value=mock_result):
+            cards = setup_audio._parse_arecord_list()
+        self.assertIsNone(cards)
 
-    def test_parse_file_error(self):
-        with patch('builtins.open', side_effect=FileNotFoundError):
-            cards = setup_audio.list_alsa_cards()
-        self.assertEqual(cards, [])
+    def test_subprocess_error(self):
+        with patch('subprocess.run', side_effect=Exception("failed")):
+            cards = setup_audio._parse_arecord_list()
+        self.assertIsNone(cards)
 
-    def test_parse_whitespace_lines_ignored(self):
-        cards_content = "\n  0 [HDMI]: Test\n\n"
-        with patch('builtins.open', mock_open(read_data=cards_content)):
-            cards = setup_audio.list_alsa_cards()
+
+class TestListAlsaCards(unittest.TestCase):
+    """Tests for list_alsa_cards with fallback."""
+
+    def test_fallback_to_arecord(self):
+        """When /proc/asound_cards fails, fallback to arecord -l."""
+        mock_result = MagicMock()
+        mock_result.stdout = "card 3: whisplaysound [Whisplay Sound], device 0: Whisplay HiFi wm8960-hifi-0 [Whisplay HiFi wm8960-hifi-0]\n"
+        
+        with patch('builtins.open', MagicMock(side_effect=FileNotFoundError())):
+            with patch('subprocess.run', return_value=mock_result) as mock_subprocess:
+                cards = setup_audio.list_alsa_cards()
+        
         self.assertEqual(len(cards), 1)
+        self.assertEqual(cards[0], (3, 'whisplaysound', 'Whisplay Sound'))
+        mock_subprocess.assert_called_once()
 
 
 class TestFindXVF3800(unittest.TestCase):
@@ -130,7 +134,6 @@ class TestSelectHardware(unittest.TestCase):
             with patch.dict(os.environ, {}, clear=True):
                 os.environ.pop('GLADOS_AUDIO_DEVICE', None)
                 result = setup_audio.select_hardware()
-        # XVF3800 is checked first in auto-detection
         self.assertEqual(result, ('xvf3800', 4))
 
     def test_auto_detect_whisplay_fallback(self):
@@ -155,32 +158,24 @@ class TestStartSpokeEnvVars(unittest.TestCase):
 
     def test_set_env_vars_xvf3800(self):
         captured_env = {}
-        
         def mock_execvp(cmd, args):
             captured_env.update(os.environ)
-            pass
-        
         with patch.object(setup_audio, 'os') as mock_os:
             mock_os.environ = captured_env
             mock_os.execvp = mock_execvp
             setup_audio.start_spoke('xvf3800', 4)
-        
         self.assertEqual(captured_env['GLADOS_CAPTURE_DEVICE'], 'plughw:4,0')
         self.assertEqual(captured_env['GLADOS_PLAYBACK_DEVICE'], 'plughw:4,0')
         self.assertEqual(captured_env['GLADOS_HW_TYPE'], 'xvf3800')
 
     def test_set_env_vars_whisplay(self):
         captured_env = {}
-        
         def mock_execvp(cmd, args):
             captured_env.update(os.environ)
-            pass
-        
         with patch.object(setup_audio, 'os') as mock_os:
             mock_os.environ = captured_env
             mock_os.execvp = mock_execvp
             setup_audio.start_spoke('whisplay', 3)
-        
         self.assertEqual(captured_env['GLADOS_CAPTURE_DEVICE'], 'plughw:3,0')
         self.assertEqual(captured_env['GLADOS_PLAYBACK_DEVICE'], 'plughw:3,0')
         self.assertEqual(captured_env['GLADOS_HW_TYPE'], 'whisplay')
