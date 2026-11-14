@@ -19,7 +19,7 @@ CHUNK_SIZE = 3200  # 1600 samples * 2 bytes
 # ── Noise suppressor ────────────────────────────────────────────────
 if NS_AVAILABLE:
     try:
-        _ns = pyrnnoise.RNNoise()
+        _ns = pyrnnoise.RNNoise(sample_rate=16000)
         logger.info("RNNoise noise suppression initialized")
     except Exception as e:
         logger.warning("Failed to init RNNoise: %s - no noise suppression", e)
