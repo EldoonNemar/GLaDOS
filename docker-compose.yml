@@ -112,43 +112,33 @@ services:
       jigowatts_default:
 
   # ── Python Spoke (optional) ──────────────────────────────────────
-  # NOTE: Do NOT run this on the hub machine. Deploy separately on
-  # the audio device (Jetson Nano, RPi, etc.) that has the microphone/speaker.
+  # NOTE: Do NOT run this on the hub machine. Deploy it on the audio
+  # device (Pi 4, etc.) that has the microphone/speaker. It lives under
+  # the "spoke" profile, so the default `docker compose up -d` on the
+  # hub machine never starts it. On the audio device, run:
   #
-  # Example deployment on the audio device:
-  #   docker run -d --name glados_spoke --network host \
-  #     --device /dev/snd:/dev/snd \
-  #     --device /dev/spidev0.0 \
-  #     --privileged \
-  #     -e GLADOS_HUB_URL=ws://192.168.1.58:5051 \
-  #     -e GLADOS_DEVICE_ID=pi4-spoke-001 \
-  #     -e GLADOS_DISPLAY=auto \
-  #     glados-glados_spoke:latest
+  #   docker compose --profile spoke up -d glados_spoke
   #
-  # (--device /dev/spidev0.0 + --privileged are only needed for the LAFVIN
-  #  HAT display: SPI panel + GPIO LED/button. Without them the spoke still
-  #  works, the face just auto-disables. /boot/firmware/config.txt must have
-  #  dtparam=spi=on.)
-  #
-  # glados_spoke is disabled here to avoid conflicts.
-  # To re-enable, uncomment below and run: docker compose --profile spoke up -d
-  #
-  # glados_spoke:
-  #   profiles: ["spoke"]
-  #   build:
-  #     context: .
-  #     dockerfile: spokes/python-spoke/Dockerfile
-  #   container_name: glados_spoke
-  #   restart: unless-stopped
-  #   network_mode: host
-  #   privileged: true  # GPIO sysfs (LAFVIN HAT LED/button); safe: Pi is single-user
-  #   devices:
-  #     - "/dev/snd:/dev/snd"
-  #     - "/dev/spidev0.0:/dev/spidev0.0"
-  #   environment:
-  #     - GLADOS_HUB_URL=ws://192.168.1.58:5051
-  #     - GLADOS_DEVICE_ID=pi4-spoke-001
-  #     - GLADOS_DISPLAY=auto
+  # (--device /dev/spidev0.0 + privileged are only needed for the LAFVIN
+  #  HAT display: SPI panel + GPIO LED/button. Without them the spoke
+  #  still works, the face just auto-disables. /boot/firmware/config.txt
+  #  must have dtparam=spi=on.)
+  glados_spoke:
+    profiles: ["spoke"]
+    build:
+      context: .
+      dockerfile: spokes/python-spoke/Dockerfile
+    container_name: glados_spoke
+    restart: unless-stopped
+    network_mode: host
+    privileged: true  # GPIO sysfs (LAFVIN HAT LED/button); safe: Pi is single-user
+    devices:
+      - "/dev/snd:/dev/snd"
+      - "/dev/spidev0.0:/dev/spidev0.0"
+    environment:
+      - GLADOS_HUB_URL=ws://192.168.1.58:5051
+      - GLADOS_DEVICE_ID=pi4-spoke-001
+      - GLADOS_DISPLAY=auto
 
 networks:
   glados:
