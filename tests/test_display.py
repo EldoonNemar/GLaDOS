@@ -491,7 +491,10 @@ class TestFaceStates(unittest.TestCase):
                 HEIGHT, WIDTH).astype(np.uint32)
             yy, xx = np.mgrid[0:HEIGHT, 0:WIDTH]
             d = np.sqrt((xx - WIDTH / 2) ** 2 + (yy - HEIGHT / 2) ** 2)
-            return int(words[(d > 50) & (d < 100)].max())
+            # annulus just outside the listening eye's max reach (r ~70)
+            # and inside the panel half-width (120); the talking ring
+            # lives at r0 ~79..113 at the test's levels
+            return int(words[(d > 76) & (d < 115)].max())
 
         # threshold: the background vignette peaks ~0x8xx in this band,
         # the amber ring words are ~0xFCxx — 0x4000 splits them cleanly

@@ -32,7 +32,7 @@ BG = np.array([0.015, 0.02, 0.045], dtype=np.float32)
 YELLOW = np.array([1.0, 0.80, 0.22], dtype=np.float32)
 AMBER = np.array([1.0, 0.62, 0.12], dtype=np.float32)
 
-EYE_RADIUS = 26.0  # base radius of the always-on center eye (px)
+EYE_RADIUS = 52.0  # base radius of the always-on center eye (px)
 
 # RGB LED + backlight per state (same color language as the ESP32 ring)
 STATE_LED = {
@@ -155,7 +155,9 @@ class Face:
             r = EYE_RADIUS * (1.0 + 0.05 * math.sin(0.9 * self._t))
         elif self.state == TALKING:
             lvl = self._tts_level
-            r = EYE_RADIUS * (0.85 + 0.8 * lvl)
+            # pulse kept modest so eye + ring stay inside the panel
+            # (half-width is 120 px; ring reaches r + 14 + 37 at most)
+            r = EYE_RADIUS * (0.85 + 0.45 * lvl)
         elif self.state == LISTENING:
             lvl = self._mic_level
             r = EYE_RADIUS * (0.9 + 0.5 * lvl)
@@ -168,12 +170,13 @@ class Face:
                 self._trail,
                 self._ring_field(cx0, cy0, r + 14.0, max(lvl, 0.15), 28, AMBER))
         elif self.state == THINKING:
+            # orbit outside the (doubled) eye
             a = self._t * 2.6 + self._ph1
-            ox = cx0 + 46.0 * math.cos(a)
-            oy = cy0 + 46.0 * math.sin(a)
+            ox = cx0 + 74.0 * math.cos(a)
+            oy = cy0 + 74.0 * math.sin(a)
             self._add_trail(self._ball_field(ox, oy, 7.0, AMBER, AMBER))
             d = np.sqrt((self._xx - cx0) ** 2 + (self._yy - cy0) ** 2)
-            guide = np.clip(1.0 - abs(d - 46.0), 0.0, 1.0) * 0.12
+            guide = np.clip(1.0 - abs(d - 74.0), 0.0, 1.0) * 0.12
             self._trail = np.maximum(self._trail,
                                      AMBER[None, None, :] * guide[:, :, None])
         frame = np.clip(self._bg + self._trail, 0.0, 1.0)
