@@ -1,16 +1,16 @@
 """
 GLaDOS face for the LAFVIN HAT display — pure numpy, no image libraries.
 
-Renders 240x280 frames as RGB565 bytes:
-  IDLE      a warm yellow ball that floats around the screen (wander
-            physics, soft wall bounces, motion trail, breathing)
-  TALKING   center ball pulsing with the TTS amplitude + an audio-reactive
-            segmented ring around it
-  LISTENING cyan ball pulsing with the mic level
-  THINKING  amber dot orbiting a faint circle (waiting on the hub)
+Renders 240x280 frames as RGB565 bytes. A solid yellow "eye" sits at the
+center of the screen and is ALWAYS on, in every state:
+  IDLE      the eye, gently breathing
+  TALKING   the eye pulsing with the TTS amplitude + an audio-reactive
+            segmented equalizer ring around it (talking only)
+  LISTENING the eye pulsing with the mic level (no ring)
+  THINKING  the eye, plus an amber dot orbiting a faint circle
 
-The ball states render through a decaying trail buffer so motion leaves a
-comet tail and state changes blend instead of popping.
+Frames render through a decaying trail buffer so state changes blend
+instead of popping.
 """
 import math
 import time
@@ -30,9 +30,9 @@ TRAIL_DECAY = 0.80       # per-tick trail persistence
 
 BG = np.array([0.015, 0.02, 0.045], dtype=np.float32)
 YELLOW = np.array([1.0, 0.80, 0.22], dtype=np.float32)
-YELLOW_CORE = np.array([1.0, 0.95, 0.55], dtype=np.float32)
 AMBER = np.array([1.0, 0.62, 0.12], dtype=np.float32)
-CYAN = np.array([0.25, 0.85, 1.0], dtype=np.float32)
+
+EYE_RADIUS = 26.0  # base radius of the always-on center eye (px)
 
 # RGB LED + backlight per state (same color language as the ESP32 ring)
 STATE_LED = {
@@ -67,12 +67,7 @@ class Face:
     def __init__(self, seed: int | None = None, now_fn=time.monotonic):
         self._rng = np.random.default_rng(seed)
         self._t = 0.0
-        self._px = float(self._rng.uniform(60, WIDTH - 60))
-        self._py = float(self._rng.uniform(70, HEIGHT - 70))
-        self._vx = float(self._rng.uniform(-25, 25))
-        self._vy = float(self._rng.uniform(-25, 25))
         self._ph1 = float(self._rng.uniform(0, 2 * math.pi))
-        self._ph2 = float(self._rng.uniform(0, 2 * math.pi))
         self._ph3 = float(self._rng.uniform(0, 2 * math.pi))
         self.state = IDLE
         self._last_tts = -1e9
@@ -114,41 +109,13 @@ class Face:
         self.state = new
         return new
 
-    # ── idle ball physics ──────────────────────────────────────────
-
-    def _ball_radius(self) -> float:
-        # breathing
-        return 24.0 * (1.0 + 0.07 * math.sin(0.9 * self._t))
-
-    def _step_ball(self, dt: float):
-        t = self._t
-        # gentle wander: incommensurate sines keep the drift organic
-        ax = 14.0 * math.cos(0.31 * t + self._ph1) + 8.0 * math.cos(0.77 * t + self._ph3)
-        ay = 14.0 * math.sin(0.27 * t + self._ph2) + 8.0 * math.sin(0.63 * t + self._ph1)
-        self._vx += ax * dt
-        self._vy += ay * dt
-        self._vx *= 0.996
-        self._vy *= 0.996
-        speed = math.hypot(self._vx, self._vy)
-        lo, hi = 18.0, 60.0  # px/s — drifting, never static or frantic
-        if speed > hi:
-            self._vx, self._vy = self._vx * hi / speed, self._vy * hi / speed
-        elif 0 < speed < lo:
-            self._vx, self._vy = self._vx * lo / speed, self._vy * lo / speed
-        self._px += self._vx * dt
-        self._py += self._vy * dt
-        r = self._ball_radius()
-        m = r + 8
-        if self._px < m:
-            self._px, self._vx = m, abs(self._vx) * 0.9
-        elif self._px > WIDTH - m:
-            self._px, self._vx = WIDTH - m, -abs(self._vx) * 0.9
-        if self._py < m:
-            self._py, self._vy = m, abs(self._vy) * 0.9
-        elif self._py > HEIGHT - m:
-            self._py, self._vy = HEIGHT - m, -abs(self._vy) * 0.9
-
     # ── render helpers ─────────────────────────────────────────────
+
+    def _eye_field(self, cx, cy, r) -> np.ndarray:
+        """Completely solid yellow disc, 1px anti-aliased edge."""
+        d = np.sqrt((self._xx - cx) ** 2 + (self._yy - cy) ** 2)
+        cover = np.clip(r + 0.5 - d, 0.0, 1.0)
+        return YELLOW[None, None, :] * cover[:, :, None]
 
     def _ball_field(self, cx, cy, r, color, core) -> np.ndarray:
         d = np.sqrt((self._xx - cx) ** 2 + (self._yy - cy) ** 2)
@@ -182,28 +149,25 @@ class Face:
              tts_level: float = 0.0) -> bytes:
         self.update(dt, mic_level, tts_level)
         cx0, cy0 = WIDTH / 2, HEIGHT / 2
+        # The eye is always on — solid yellow in every state; only its
+        # size changes (and the equalizer ring, which is talking-only).
         if self.state == IDLE:
-            self._step_ball(dt)
-            self._add_trail(self._ball_field(self._px, self._py,
-                                             self._ball_radius(), YELLOW,
-                                             YELLOW_CORE))
+            r = EYE_RADIUS * (1.0 + 0.05 * math.sin(0.9 * self._t))
         elif self.state == TALKING:
             lvl = self._tts_level
-            r = 30.0 * (0.75 + 0.9 * lvl)
-            self._add_trail(self._ball_field(cx0, cy0, r, YELLOW, YELLOW_CORE))
+            r = EYE_RADIUS * (0.85 + 0.8 * lvl)
+        elif self.state == LISTENING:
+            lvl = self._mic_level
+            r = EYE_RADIUS * (0.9 + 0.5 * lvl)
+        else:  # THINKING
+            r = EYE_RADIUS
+        self._add_trail(self._eye_field(cx0, cy0, r))
+        if self.state == TALKING:
+            # the equalizer ring is a talking-only effect
             self._trail = np.maximum(
                 self._trail,
                 self._ring_field(cx0, cy0, r + 14.0, max(lvl, 0.15), 28, AMBER))
-        elif self.state == LISTENING:
-            lvl = self._mic_level
-            r = 24.0 * (0.8 + 0.7 * lvl)
-            self._add_trail(self._ball_field(
-                cx0, cy0, r, CYAN,
-                np.array([0.75, 0.97, 1.0], np.float32)))
-            self._trail = np.maximum(
-                self._trail,
-                self._ring_field(cx0, cy0, r + 12.0, max(lvl, 0.1), 20, CYAN))
-        else:  # THINKING
+        elif self.state == THINKING:
             a = self._t * 2.6 + self._ph1
             ox = cx0 + 46.0 * math.cos(a)
             oy = cy0 + 46.0 * math.sin(a)

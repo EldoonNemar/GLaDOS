@@ -421,17 +421,21 @@ class TestFace(unittest.TestCase):
         self.assertEqual(len(frame), WIDTH * HEIGHT * 2)
         self.assertEqual(np.frombuffer(frame, dtype=">u2").dtype, np.dtype(">u2"))
 
-    def test_idle_ball_moves_and_stays_in_bounds(self):
+    def test_idle_eye_centered_and_visible(self):
+        # the eye is always on: centered and completely yellow, even idle
         f = Face(seed=3)
-        p0 = (f._px, f._py)
-        for _ in range(200):  # 10 s of simulated drift
+        for _ in range(50):
             f.tick(0.05)
-        p1 = (f._px, f._py)
-        self.assertNotEqual(p0, p1)  # actually wanders
-        self.assertGreaterEqual(f._px, 0)
-        self.assertLessEqual(f._px, WIDTH)
-        self.assertGreaterEqual(f._py, 0)
-        self.assertLessEqual(f._py, HEIGHT)
+        words = np.frombuffer(f.tick(0.05), dtype=">u2").reshape(
+            HEIGHT, WIDTH).astype(np.uint32)
+        center = words[HEIGHT // 2, WIDTH // 2]
+        r = (center >> 11 & 0x1F) * 255 // 31
+        b = (center & 0x1F) * 255 // 31
+        self.assertGreater(r, 150)  # solid yellow at the exact center
+        self.assertGreater(r, b)
+        # corners are still near-black background
+        self.assertLess(words[2, 2], 0x300)
+        self.assertLess(words[HEIGHT - 3, WIDTH - 3], 0x300)
 
     def test_idle_frame_is_yellow(self):
         f = Face(seed=5)
@@ -478,6 +482,30 @@ class TestFaceStates(unittest.TestCase):
         for _ in range(5):
             f.update(0.1, 0.01, 0.01)  # noise floor, under both gates
         self.assertEqual(f.state, IDLE)
+
+    def test_equalizer_ring_only_while_talking(self):
+        # listening pulses the eye but draws no ring; the segmented
+        # equalizer ring is a talking-only effect
+        def zone_max(frame: bytes) -> int:
+            words = np.frombuffer(frame, dtype=">u2").reshape(
+                HEIGHT, WIDTH).astype(np.uint32)
+            yy, xx = np.mgrid[0:HEIGHT, 0:WIDTH]
+            d = np.sqrt((xx - WIDTH / 2) ** 2 + (yy - HEIGHT / 2) ** 2)
+            return int(words[(d > 50) & (d < 100)].max())
+
+        # threshold: the background vignette peaks ~0x8xx in this band,
+        # the amber ring words are ~0xFCxx — 0x4000 splits them cleanly
+        f = Face(seed=1)
+        for _ in range(30):
+            f.tick(0.1, 0.9, 0.0)  # sustained listening
+        self.assertEqual(f.state, LISTENING)
+        self.assertLess(zone_max(f.tick(0.1, 0.9, 0.0)), 0x4000)  # no ring
+
+        g = Face(seed=1)
+        for _ in range(30):
+            g.tick(0.1, 0.0, 0.9)  # sustained talking
+        self.assertEqual(g.state, TALKING)
+        self.assertGreater(zone_max(g.tick(0.1, 0.0, 0.9)), 0x4000)  # ring
 
 
 # ── main: AudioMeter ─────────────────────────────────────────────────
