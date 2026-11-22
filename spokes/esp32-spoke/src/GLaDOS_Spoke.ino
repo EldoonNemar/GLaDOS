@@ -165,6 +165,12 @@ static QueueHandle_t audio_rx_queue = NULL;
 static i2s_chan_handle_t i2s_rx_handle = NULL;
 static i2s_chan_handle_t i2s_tx_handle = NULL;
 
+// Playback volume (0-100, hub frame 0x16). Written by the WS task, read by
+// the playback task; a plain int16 is atomic on Xtensa, volatile keeps the
+// compiler from hoisting the load out of the per-sample loop.
+// 100 = full (unchanged behavior), 0 = digital silence.
+static volatile int16_t playback_volume = 100;
+
 // Forward declarations
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                 int32_t event_id, void *event_data);
@@ -614,6 +620,8 @@ static void audio_playback_task(void *arg)
             size_t n = (n_in - i) < CONV_CHUNK ? (n_in - i) : CONV_CHUNK;
             for (size_t j = 0; j < n; j++) {
                 int32_t s = (int32_t)(int16_t)((uint16_t)pcm[(i + j) * 2] | ((uint16_t)pcm[(i + j) * 2 + 1] << 8));
+                int16_t vol = playback_volume;  // hub 0x16 gain (per chunk, not per sample)
+                if (vol < 100) s = s * vol / 100;  // int16*100 fits int32; no clamp needed
                 s <<= 16;  // 16-bit -> 32-bit, upper-aligned (Philips)
                 conv_buf[j * 4 + 0] = s;  // L @ t
                 conv_buf[j * 4 + 1] = s;  // R @ t
@@ -782,6 +790,14 @@ static int ws_handle_frame(uint8_t opcode, const uint8_t *payload, size_t payloa
         if (body_len >= 1) {
             xvf_led_set_state(body[0]);
             Serial.printf("LED -> %d\n", body[0]);
+        }
+    } else if (frame_type == 0x16) {  // Playback volume (int16 LE, 0-100)
+        if (body_len >= 2) {
+            int16_t v = (int16_t)((uint16_t)body[0] | ((uint16_t)body[1] << 8));
+            if (v < 0) v = 0;
+            if (v > 100) v = 100;
+            playback_volume = v;
+            Serial.printf("Volume -> %d%%\n", (int)v);
         }
     }
     return WS_ACT_OK;
