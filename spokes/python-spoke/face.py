@@ -45,13 +45,19 @@ STATE_BACKLIGHT = {IDLE: 55, LISTENING: 100, THINKING: 85, TALKING: 100}
 
 
 def to_rgb565(frame: np.ndarray) -> bytes:
-    """float32 [H, W, 3] in 0..1 -> little-endian RGB565 bytes."""
+    """float32 [H, W, 3] in 0..1 -> RGB565 bytes, HIGH BYTE FIRST.
+
+    The ST7789's 16-bit SPI path assembles each pixel word MSB-first
+    (LAFVIN's own driver ships big-endian payloads too). Sending
+    little-endian byte-swaps every word, which the panel decodes as a
+    scrambled R/B channel swap — the face renders blue/purple where it
+    should be warm yellow, with ring artifacts from the bit reversal."""
     rgb = (np.clip(frame, 0.0, 1.0) * 255.0).astype(np.uint8)
     r = rgb[:, :, 0].astype(np.uint16)
     g = rgb[:, :, 1].astype(np.uint16)
     b = rgb[:, :, 2].astype(np.uint16)
     words = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)
-    return np.ascontiguousarray(words.astype("<u2")).tobytes()
+    return np.ascontiguousarray(words.astype(">u2")).tobytes()
 
 
 class Face:

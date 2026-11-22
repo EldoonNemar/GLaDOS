@@ -101,11 +101,20 @@ class TestRgb565(unittest.TestCase):
     def test_face_packer_agrees_with_lafvin_pack(self):
         rng = np.random.default_rng(0)
         frame = rng.uniform(0.0, 1.0, size=(3, 4, 3)).astype(np.float32)
-        got = np.frombuffer(to_rgb565(frame), dtype="<u2")
+        got = np.frombuffer(to_rgb565(frame), dtype=">u2")
         px = (np.clip(frame, 0, 1) * 255).astype(np.uint8).reshape(-1, 3)
         want = np.array(
             [rgb565(int(r), int(g), int(b)) for r, g, b in px], dtype="<u2")
         self.assertTrue((got == want).all())
+
+    def test_wire_bytes_are_big_endian(self):
+        # Regression: little-endian words byte-swap on the SPI bus and the
+        # panel renders the face as a blue/purple channel-scramble.
+        px = np.zeros((1, 1, 3), dtype=np.float32)
+        px[0, 0] = (1.0, 0.0, 0.0)  # pure red -> RGB565 0xF800
+        self.assertEqual(to_rgb565(px), b"\xF8\x00")
+        px[0, 0] = (0.0, 0.0, 1.0)  # pure blue -> 0x001F
+        self.assertEqual(to_rgb565(px), b"\x00\x1F")
 
 
 # ── lafvin: ST7789 wire protocol ─────────────────────────────────────
@@ -410,7 +419,7 @@ class TestFace(unittest.TestCase):
         f = Face(seed=7)
         frame = f.tick(0.04)
         self.assertEqual(len(frame), WIDTH * HEIGHT * 2)
-        self.assertEqual(np.frombuffer(frame, dtype="<u2").dtype, np.dtype("<u2"))
+        self.assertEqual(np.frombuffer(frame, dtype=">u2").dtype, np.dtype(">u2"))
 
     def test_idle_ball_moves_and_stays_in_bounds(self):
         f = Face(seed=3)
@@ -428,7 +437,7 @@ class TestFace(unittest.TestCase):
         f = Face(seed=5)
         for _ in range(10):
             f.tick(0.05)
-        words = np.frombuffer(f.tick(0.05), dtype="<u2").astype(np.uint32)
+        words = np.frombuffer(f.tick(0.05), dtype=">u2").astype(np.uint32)
         r = (words >> 11 & 0x1F) * 255 // 31
         b = (words & 0x1F) * 255 // 31
         i = int(np.argmax(words))  # brightest pixel = ball core
