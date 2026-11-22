@@ -5,37 +5,43 @@
 #   docker compose --profile spoke up -d  # Also build/start the Python spoke
 
 services:
-  # ── LLM: llama.cpp server (Gemma 4 E4B) ──────────────────────────
-  glados_llama:
-    image: ghcr.io/ggml-org/llama.cpp:server-rocm
-    container_name: glados_llama
-    restart: unless-stopped
-    devices:
-      - "/dev/kfd:/dev/kfd"
-      - "/dev/dri:/dev/dri"
-    ports:
-      - "18080:8080"
-    volumes:
-      - ./models:/models
-    environment:
-      - HIP_VISIBLE_DEVICES=0,1
-      - GGML_CUDA_P2P=1
-    command:
-      - "-m"
-      - "/models/gemma-4-E4B-it-Q4_K_M.gguf"
-      - "--host"
-      - "0.0.0.0"
-      - "--port"
-      - "8080"
-      - "-c"
-      - "65536"
-      - "--parallel"
-      - "2"
-      - "-ngl"
-      - "99"
-    networks:
-      glados:
-      jigowatts_default:
+  # ── LLM (retired): llama.cpp server (Gemma 4 E4B) ────────────────
+  # Replaced by the radiance engine (qwen3.8-27b) that glados_hub now calls
+  # directly (LLM_URL below). Kept commented for a one-step rollback:
+  # re-add the service, set LLAMA_URL=http://glados_llama:8080 on the hub,
+  # rebuild. While it was up it held ~3 GB of VRAM on each R9700 — once
+  # removed, restart radiance so that VRAM is claimed for its KV pool.
+  #
+  # glados_llama:
+  #   image: ghcr.io/ggml-org/llama.cpp:server-rocm
+  #   container_name: glados_llama
+  #   restart: unless-stopped
+  #   devices:
+  #     - "/dev/kfd:/dev/kfd"
+  #     - "/dev/dri:/dev/dri"
+  #   ports:
+  #     - "18080:8080"
+  #   volumes:
+  #     - ./models:/models
+  #   environment:
+  #     - HIP_VISIBLE_DEVICES=0,1
+  #     - GGML_CUDA_P2P=1
+  #   command:
+  #     - "-m"
+  #     - "/models/gemma-4-E4B-it-Q4_K_M.gguf"
+  #     - "--host"
+  #     - "0.0.0.0"
+  #     - "--port"
+  #     - "8080"
+  #     - "-c"
+  #     - "65536"
+  #     - "--parallel"
+  #     - "2"
+  #     - "-ngl"
+  #     - "99"
+  #   networks:
+  #     glados:
+  #     jigowatts_default:
 
   # ── ASR + TTS Engine ──────────────────────────────────────────────
   glados_engine:
@@ -51,8 +57,11 @@ services:
       - "5052:8081"
     volumes:
       - ./models:/models
+      - /opt/rocm/core-10.1/lib:/opt/rocm/lib:ro
     environment:
       - HIP_VISIBLE_DEVICES=0
+      - LD_LIBRARY_PATH=/opt/rocm/lib
+      - ROCM_VERSION=10.1.0
       - MODEL_DIR=/models
       - HF_TOKEN=${HF_TOKEN}
     networks:
@@ -73,30 +82,63 @@ services:
     environment:
       - HUB_PORT=5051
       - REST_PORT=5050
-      - LLAMA_URL=http://glados_llama:8080
+      # Local LLM = the radiance engine (host networking, port 8000) serving
+      # qwen3.8-27b; replaces the retired glados_llama (Gemma 4 E4B).
+      - LLM_URL=http://host.docker.internal:8000
+      - LLM_API_KEY=${LLM_API_KEY:?set LLM_API_KEY in .env}
+      - LLM_MODEL=qwen3.8-27b
       - ENGINE_URL=http://glados_engine:8081
       - WAKE_WORD=glados
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
+      - GLADOS_LOCATION=${GLADOS_LOCATION:-Warrenton, Virginia}
+      - CONTEXT_TTL_S=${CONTEXT_TTL_S:-600}
+      # Scrypted NVR object-detection push (see .env; broker runs inside
+      # Scrypted via the @scrypted/mqtt plugin). Per-camera policy
+      # (announce on/off, classes, zone whitelist, cooldown) lives in
+      # docker/hub/glados_hub/config/cameras.json.
+      - SCRYPTED_MQTT_HOST=${SCRYPTED_MQTT_HOST:-192.168.1.177}
+      - SCRYPTED_MQTT_PORT=${SCRYPTED_MQTT_PORT:-1883}
+      - SCRYPTED_MQTT_USER=${SCRYPTED_MQTT_USER:-glados}
+      - SCRYPTED_MQTT_PASS=${SCRYPTED_MQTT_PASS:-}
+    # radiance runs on the host network; reach it via the host gateway
+    # (same pattern as open_webui in /opt/jigowatts).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
-      - glados_llama
       - glados_engine
     networks:
       glados:
       jigowatts_default:
 
-  # ── Python Spoke (optional -- laptop/RPi) ─────────────────────────
-  glados_spoke:
-    profiles: ["spoke"]
-    build:
-      context: .
-      dockerfile: spokes/python-spoke/Dockerfile
-    container_name: glados_spoke
-    restart: unless-stopped
-    network_mode: host
-    devices:
-      - "/dev/snd:/dev/snd"
-    environment:
-      - GLADOS_HUB_URL=ws://localhost:5051
-      - GLADOS_DEVICE_ID=python-spoke-001
+  # ── Python Spoke (optional) ──────────────────────────────────────
+  # NOTE: Do NOT run this on the hub machine. Deploy separately on
+  # the audio device (Jetson Nano, RPi, etc.) that has the microphone/speaker.
+  #
+  # Example deployment on the audio device:
+  #   docker run -d --name glados_spoke --network host \
+  #     --device /dev/snd:/dev/snd \
+  #     -e GLADOS_HUB_URL=ws://192.168.1.58:5051 \
+  #     -e GLADOS_DEVICE_ID=spoke-001 \
+  #     glados-glados_spoke:latest
+  #
+  # glados_spoke is disabled here to avoid conflicts.
+  # To re-enable, uncomment below and run: docker compose --profile spoke up -d
+  #
+  # glados_spoke:
+  #   profiles: ["spoke"]
+  #   build:
+  #     context: .
+  #     dockerfile: spokes/python-spoke/Dockerfile
+  #   container_name: glados_spoke
+  #   restart: unless-stopped
+  #   network_mode: host
+  #   devices:
+  #     - "/dev/snd:/dev/snd"
+  #   environment:
+  #     - GLADOS_HUB_URL=ws://glados_hub:5051
+  #     - GLADOS_DEVICE_ID=python-spoke-001
+  #     - GLADOS_AUDIO_DEVICE=whisplay
 
 networks:
   glados:

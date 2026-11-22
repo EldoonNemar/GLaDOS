@@ -14,4 +14,4 @@ COPY docker/hub/glados_hub/prompts/ ./glados_hub/prompts/
 
 EXPOSE 5050 5051
 
-CMD ["uvicorn", "hub:app", "--host", "0.0.0.0", "--port", "5051", "--app-dir", "glados_hub"]
+CMD ["uvicorn", "glados_hub.hub:app", "--host", "0.0.0.0", "--port", "5051"]

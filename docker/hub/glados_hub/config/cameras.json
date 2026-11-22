@@ -1,0 +1,21 @@
+{
+  "_doc": "Camera monitoring policy for glados_hub (see glados_hub/cameras.py). One entry per camera. 'id' is the camera's numeric Scrypted device id (e.g. '65' — the number shown in Scrypted's device id / used in the scrypted/<id>/ObjectDetector MQTT topic; front=65, back=62). 'label' = spoken name in reports. 'announce' = auto-announce activity on the house speakers. 'classes' = classes to track/announce. 'zones' = extra hub-side whitelist of the NVR zone tags a detection must carry to count (empty = accept whatever the NVR emits; the zones drawn in the Scrypted UI still apply at the source). NOTE: package detections are tagged 'packageZone' — include that name here if you keep package announcements while using a zone whitelist. 'cooldown_s' = re-announce cooldown. 'lines' = per-class override of the spoken announcement line. After editing: docker compose build glados_hub && docker compose up -d glados_hub",
+  "cameras": {
+    "front": {
+      "label": "front yard",
+      "id": "65",
+      "announce": true,
+      "classes": ["person", "package"],
+      "zones": ["Porch", "driveway", "packageZone"],
+      "cooldown_s": 90
+    },
+    "back": {
+      "label": "back yard",
+      "id": "62",
+      "announce": false,
+      "classes": ["person", "package"],
+      "zones": [],
+      "cooldown_s": 90
+    }
+  }
+}

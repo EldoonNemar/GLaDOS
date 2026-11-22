@@ -1,0 +1,15 @@
+{
+  "lights": {
+    "livingroom ceiling": "192.168.1.9",
+    "livingroom left": "192.168.1.18",
+    "livingroom right": "192.168.1.5"
+  },
+  "types": {
+    "livingroom ceiling": "plug",
+    "livingroom left": "bulb",
+    "livingroom right": "bulb"
+  },
+  "groups": {
+    "livingroom": ["livingroom ceiling", "livingroom left", "livingroom right"]
+  }
+}

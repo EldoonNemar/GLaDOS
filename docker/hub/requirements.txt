@@ -3,3 +3,7 @@ uvicorn[standard]
 websockets
 httpx
 numpy
+vosk
+python-kasa
+paho-mqtt>=2.0,<3
+pytest
