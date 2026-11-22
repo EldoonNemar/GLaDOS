@@ -112,6 +112,18 @@ ctl.!default {{ type hw; card {card} }}
         print(f"WARNING: could not write /etc/asound.conf: {e}")
 
 
+def set_mic_gain():
+    """Max out the Whisplay HAT mic gain for better capture (best-effort)."""
+    result = subprocess.run(
+        ['amixer', '-c', 'whisplaysound', 'cset', 'name=mic', '100'],
+        capture_output=True, text=True, timeout=5
+    )
+    if result.returncode == 0:
+        print(f"Whisplay mic gain: {result.stdout.strip()}")
+    else:
+        print("WARNING: could not set Whisplay mic gain")
+
+
 def start_spoke(hw, card):
     """Export the audio device env vars and exec the spoke."""
     os.environ['GLADOS_HW_TYPE'] = hw
@@ -131,6 +143,8 @@ def main():
         sys.exit(1)
     print(f"Using {hw} on card {card}")
     configure_asound(card)
+    if hw == 'whisplay':
+        set_mic_gain()
     start_spoke(hw, card)
 
 

@@ -38,7 +38,11 @@ case "$ACTION" in
     start)
         if [[ "$TARGET" == "spoke" ]]; then
             echo "[glados] Starting spoke only..."
-            docker compose up -d glados_spoke
+            if [[ -f "docker/docker-compose-spoke.yml" ]]; then
+                docker compose -f docker/docker-compose-spoke.yml --profile spoke up -d
+            else
+                docker compose up -d glados_spoke
+            fi
         else
             echo "[glados] Starting backend..."
             docker compose up -d glados_llama glados_engine glados_hub
@@ -48,7 +52,11 @@ case "$ACTION" in
     stop)
         if [[ "$TARGET" == "spoke" ]]; then
             echo "[glados] Stopping spoke..."
-            docker compose down glados_spoke
+            if [[ -f "docker/docker-compose-spoke.yml" ]]; then
+                docker compose -f docker/docker-compose-spoke.yml down glados_spoke
+            else
+                docker compose down glados_spoke
+            fi
         else
             echo "[glados] Stopping backend..."
             docker compose down glados_llama glados_engine glados_hub
@@ -57,7 +65,11 @@ case "$ACTION" in
     restart)
         if [[ "$TARGET" == "spoke" ]]; then
             echo "[glados] Restarting spoke..."
-            docker compose down glados_spoke && docker compose up -d glados_spoke
+            if [[ -f "docker/docker-compose-spoke.yml" ]]; then
+                docker compose -f docker/docker-compose-spoke.yml down glados_spoke && docker compose -f docker/docker-compose-spoke.yml up -d glados_spoke
+            else
+                docker compose down glados_spoke && docker compose up -d glados_spoke
+            fi
         else
             echo "[glados] Restarting backend..."
             docker compose down glados_llama glados_engine glados_hub && docker compose up -d glados_llama glados_engine glados_hub
@@ -67,7 +79,12 @@ case "$ACTION" in
     build)
         if [[ "$TARGET" == "spoke" ]]; then
             echo "[glados] Building spoke..."
-            docker compose build glados_spoke
+            # Use spoke-only compose file if available (Orange Pi / arm64)
+            if [[ -f "docker/docker-compose-spoke.yml" ]]; then
+                cd docker && docker compose -f docker-compose-spoke.yml build glados_spoke && cd ..
+            else
+                docker compose build glados_spoke
+            fi
         else
             echo "[glados] Building backend..."
             docker compose build glados_engine glados_hub

@@ -1,0 +1,15 @@
+services:
+  glados_spoke:
+    profiles: ["spoke"]
+    build:
+      context: ..
+      dockerfile: spokes/python-spoke/Dockerfile
+    container_name: glados_spoke
+    restart: unless-stopped
+    network_mode: host
+    devices:
+      - "/dev/snd:/dev/snd"
+    environment:
+      - GLADOS_HUB_URL=ws://192.168.1.58:5051
+      - GLADOS_DEVICE_ID=OrangePi2W
+      - GLADOS_AUDIO_DEVICE=whisplay
