@@ -79,9 +79,18 @@ services:
       - "5051:5051"
     volumes:
       - ./models:/models:ro
+      # Live-editable config (see the web UI at http://<hub>:5051/): the
+      # hub reads AND writes these at runtime, so light/camera/prompt
+      # changes apply immediately — no rebuild, no restart.
+      - ./docker/hub/glados_hub/config:/app/glados_hub/config
+      - ./docker/hub/glados_hub/prompts:/app/glados_hub/prompts
     environment:
       - HUB_PORT=5051
       - REST_PORT=5050
+      # Optional: require ?token=... (or X-Config-Token) on the config UI
+      # and /api/config/*. Empty (default) = open on the LAN, same as
+      # /health and /say.
+      - GLADOS_CONFIG_TOKEN=${GLADOS_CONFIG_TOKEN:-}
       # Local LLM = the radiance engine (host networking, port 8000) serving
       # qwen3.8-27b; replaces the retired glados_llama (Gemma 4 E4B).
       - LLM_URL=http://host.docker.internal:8000

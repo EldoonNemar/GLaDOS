@@ -49,8 +49,10 @@ MQTT_USER = os.environ.get("SCRYPTED_MQTT_USER", "")
 MQTT_PASS = os.environ.get("SCRYPTED_MQTT_PASS", "")
 # The camera inventory + per-camera policy live in config/cameras.json
 # (same pattern as config/kasa.json; override the path with
-# CAMERAS_CONFIG_PATH). Edit the JSON, not this file, to add a camera,
-# flip a camera to announce, or restrict which NVR zones count.
+# CAMERAS_CONFIG_PATH). The file is bind-mounted into the container and
+# editable at runtime via the hub's web UI — or edit the JSON directly
+# and hit the config server's reload. Add a camera, flip announce on,
+# or restrict which NVR zones count without a rebuild.
 _DEFAULT_CONFIG = Path(__file__).parent / "config" / "cameras.json"
 CONFIG_PATH = Path(os.environ.get("CAMERAS_CONFIG_PATH", str(_DEFAULT_CONFIG)))
 # Classes that trigger an automatic spoken announcement (front camera only).
@@ -447,6 +449,17 @@ def is_configured() -> bool:
     return bool(MQTT_HOST and MQTT_PASS and CONFIG.cameras)
 
 
+def _build(announce_fn) -> CameraMonitor:
+    """Construct a monitor from the current CONFIG + broker env."""
+    cams = {name: spec["id"] for name, spec in CONFIG.cameras.items()}
+    return CameraMonitor(
+        MQTT_HOST, MQTT_PORT, MQTT_USER, MQTT_PASS,
+        cams,
+        announce_enabled=tuple(n for n, s in CONFIG.cameras.items() if s["announce"]),
+        settings=dict(CONFIG.cameras),
+    )
+
+
 def start(announce_fn=None) -> bool:
     """Start the monitor (idempotent). Returns True when it's running."""
     global MONITOR
@@ -454,14 +467,35 @@ def start(announce_fn=None) -> bool:
         return True
     if not is_configured():
         return False
-    cams = {name: spec["id"] for name, spec in CONFIG.cameras.items()}
-    MONITOR = CameraMonitor(
-        MQTT_HOST, MQTT_PORT, MQTT_USER, MQTT_PASS,
-        cams,
-        announce_enabled=tuple(n for n, s in CONFIG.cameras.items() if s["announce"]),
-        settings=dict(CONFIG.cameras),
-    )
+    MONITOR = _build(announce_fn)
     MONITOR.start(announce_fn)
+    return True
+
+
+def reload() -> bool:
+    """Re-read cameras.json and re-apply it to the live monitor.
+
+    The config server calls this after a successful write. The broker
+    connection is torn down and re-established (re-subscribe), so camera
+    adds/removes/renumbers all work; detection history resets with it —
+    acceptable for a deliberate config change. announce_fn is carried
+    over from the running monitor. Returns True when a monitor is
+    running afterwards (False = no longer configured).
+    """
+    global CONFIG, MONITOR
+    CONFIG = CameraConfig.load()
+    if not is_configured():
+        logger.warning("camera config reload: no longer configured — monitor stopped")
+        if MONITOR is not None:
+            MONITOR.stop()
+            MONITOR = None
+        return False
+    announce_fn = MONITOR.announce_fn if MONITOR is not None else None
+    if MONITOR is not None:
+        MONITOR.stop()
+    MONITOR = _build(announce_fn)
+    MONITOR.start(announce_fn)
+    logger.info("camera config reloaded: %s", {n: s["id"] for n, s in CONFIG.cameras.items()})
     return True
 
 

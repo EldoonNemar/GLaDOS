@@ -10,6 +10,10 @@
     "livingroom right": "bulb"
   },
   "groups": {
-    "livingroom": ["livingroom ceiling", "livingroom left", "livingroom right"]
+    "livingroom": [
+      "livingroom ceiling",
+      "livingroom left",
+      "livingroom right"
+    ]
   }
 }

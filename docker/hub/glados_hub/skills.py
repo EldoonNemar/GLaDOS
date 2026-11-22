@@ -251,6 +251,21 @@ TOOLS = [
 ]
 
 
+def refresh_tool_enums() -> None:
+    """Re-derive config-driven tool argument enums from the live config.
+
+    The check_camera camera enum is captured at import; the config server
+    calls this after a cameras.json reload so the LLM sees added/removed
+    cameras on the next turn. Safe to call any time (idempotent).
+    """
+    for tool in TOOLS:
+        fn = tool.get("function", {})
+        if fn.get("name") == "check_camera":
+            fn["parameters"]["properties"]["camera"]["enum"] = (
+                list(cameras.CONFIG.cameras) or ["front"]
+            )
+
+
 async def execute_tool(name: str, args: dict, speaker: str) -> str:
     """Run one tool call. Never raises — returns a short result string for the LLM."""
     try:

@@ -39,6 +39,7 @@ import websockets
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
 
 from . import cameras
+from . import config_server
 from . import decision
 from . import kasa_lights
 from . import llm as llm_client
@@ -97,16 +98,46 @@ NAG_BUSY_WAIT_S = 30     # wait this long for a busy device to finish its curren
 LED_OFF, LED_LISTEN, LED_THINK, LED_SPEAK, LED_ALARM = 0, 1, 2, 3, 4
 
 PROMPT_PATH = Path(__file__).parent / "prompts" / "glados_system.txt"
-with open(PROMPT_PATH) as f:
-    SYSTEM_PROMPT = f.read()
+
+
+def _build_system_prompt() -> str:
+    """Base personality + the live capability block (device inventory).
+
+    Re-reads the prompt file and re-derives the capability block from the
+    loaded configs on every call, so a config change (light/camera added
+    or removed, prompt file edited) shows up on the next rebuild without
+    a restart. Called at import and by rebuild_system_prompt() only —
+    never per utterance.
+    """
+    base = PROMPT_PATH.read_text()
+    caps = skills.describe_capabilities()
+    return base + ("\n\n" + caps if caps else "")
+
+
 # Tool surface (lights/timers/announcements) + the actual device inventory,
 # appended once at import so every prompt knows what she can do.
-_capabilities = skills.describe_capabilities()
-if _capabilities:
-    SYSTEM_PROMPT += "\n\n" + _capabilities
+SYSTEM_PROMPT = _build_system_prompt()
 
 logger.info("GLaDOS system prompt loaded (%d chars)", len(SYSTEM_PROMPT))
 logger.info("GEMINI: model=%s key=%s", GEMINI_MODEL, "set" if GEMINI_API_KEY else "NOT SET (falling back to local llama)")
+
+
+def rebuild_system_prompt() -> None:
+    """Rebuild SYSTEM_PROMPT after a config-file change (config server).
+
+    Re-reads the personality file, re-derives the capability block from
+    the (already reloaded) configs, refreshes the config-driven tool
+    enums, and pushes the result to every in-flight session — so a light
+    or camera added at runtime is visible to her on the next reply, no
+    restart and no spoke reconnect needed.
+    """
+    global SYSTEM_PROMPT
+    skills.refresh_tool_enums()
+    SYSTEM_PROMPT = _build_system_prompt()
+    for s in active_sessions.values():
+        if s.messages and s.messages[0]["role"] == "system":
+            s.messages[0]["content"] = SYSTEM_PROMPT
+    logger.info("system prompt rebuilt (%d chars) after config change", len(SYSTEM_PROMPT))
 
 app = FastAPI(title="GLaDOS Hub", version="0.3.0")
 active_sessions: dict = {}
@@ -128,6 +159,24 @@ asr_engine = ASREngine()
 # in between.
 DEFAULT_VOLUME = 100
 VOLUME: dict[str, int] = {}
+
+
+class _VolumeApi:
+    """Volume bridge for the config UI (keeps config_server import-free of
+    the hub). list() = every known device + its level; set() = apply +
+    push frame 0x16 to a connected spoke."""
+
+    def list(self) -> dict:
+        devices = set(active_sessions) | set(VOLUME)
+        return {d: get_volume(d) for d in sorted(devices)}
+
+    async def set(self, device_id: str, level: int) -> int:
+        new = apply_volume(device_id, level=level)
+        s = active_sessions.get(device_id)
+        if s is not None and s.ws is not None:
+            await _send_volume(s.ws, new)
+        logger.info("config: volume %s -> %d", device_id, new)
+        return new
 
 
 def get_volume(device_id: str) -> int:
@@ -922,3 +971,13 @@ async def _nag(session: Session, first_line: str) -> None:
             session.bargein_hits = 0
             session.echo_level = 0.0
         await _send_led(ws, LED_OFF)
+
+
+# ── Live config UI (web) ────────────────────────────────────────────
+# The hub serves its own configuration page (GET /) + the /api/config/*
+# endpoints (see config_server.py). The config + prompts dirs are
+# bind-mounted, so a save rewrites the host file and hot-reloads the
+# in-memory state — no rebuild, no restart.
+app.include_router(config_server.router)
+config_server.set_on_changed(rebuild_system_prompt)
+config_server.set_volume_api(_VolumeApi())

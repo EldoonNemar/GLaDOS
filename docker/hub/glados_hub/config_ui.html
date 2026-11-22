@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GLaDOS · Configuration</title>
+<style>
+  :root {
+    --bg:#0b0e13; --panel:#131824; --panel2:#1a2130; --fg:#d8dee9;
+    --dim:#8a93a6; --line:#2a3346; --acc:#ffd24a; --ok:#58d68d;
+    --err:#ff6b6b; --cyan:#4ac3ff;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; }
+  header { display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+           padding:14px 20px; border-bottom:1px solid var(--line); background:var(--panel); }
+  header h1 { font-size:16px; margin:0; letter-spacing:.07em; text-transform:uppercase; }
+  header h1 span { color:var(--acc); }
+  .pill { font-size:12px; padding:3px 10px; border-radius:999px;
+          border:1px solid var(--line); color:var(--dim); }
+  .pill.ok { color:var(--ok); border-color:var(--ok); }
+  .pill.bad { color:var(--err); border-color:var(--err); }
+  main { max-width:1000px; margin:0 auto; padding:20px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+          margin-bottom:22px; overflow:hidden; }
+  .card > h2 { margin:0; padding:12px 16px; font-size:13px; letter-spacing:.06em;
+               text-transform:uppercase; color:var(--acc); background:var(--panel2);
+               border-bottom:1px solid var(--line);
+               display:flex; justify-content:space-between; align-items:center; gap:10px; }
+  .card .body { padding:16px; }
+  table { width:100%; border-collapse:collapse; }
+  th { text-align:left; font-size:11px; text-transform:uppercase; color:var(--dim);
+       letter-spacing:.08em; padding:4px 8px; }
+  td { padding:4px 8px; border-top:1px solid var(--line); vertical-align:middle; }
+  input, select, textarea { background:var(--bg); color:var(--fg);
+     border:1px solid var(--line); border-radius:6px; padding:6px 8px; font:inherit; width:100%; }
+  textarea { font-family:ui-monospace,Menlo,monospace; font-size:12.5px; min-height:200px;
+             resize:vertical; }
+  button { background:var(--acc); color:#111; border:0; border-radius:6px;
+           padding:8px 16px; font:inherit; font-weight:600; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--dim); border:1px solid var(--line);
+                 padding:5px 10px; font-weight:400; }
+  button.danger { background:transparent; color:var(--err); border:1px solid var(--err);
+                  border-radius:4px; padding:1px 8px; font-size:13px; }
+  .msg { font-size:13px; margin-top:10px; min-height:18px; }
+  .msg.ok { color:var(--ok); }
+  .msg.err { color:var(--err); }
+  .foot { padding:10px 16px; border-top:1px solid var(--line);
+          display:flex; gap:10px; justify-content:flex-end; align-items:center; }
+  .hint { color:var(--dim); font-size:12px; }
+  .cam-card { border:1px solid var(--line); border-radius:8px; padding:12px;
+              margin-bottom:12px; background:var(--panel2); }
+  .cam-card h3 { margin:0 0 10px; font-size:13px; color:var(--cyan); display:flex;
+                 justify-content:space-between; align-items:center; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:8px 14px; }
+  .grid2 label, .stack label { display:block; font-size:11px; color:var(--dim);
+             text-transform:uppercase; letter-spacing:.06em; margin-bottom:8px; }
+  .stack label input, .stack label textarea { margin-top:4px; }
+  .chkrow { display:flex; gap:8px; align-items:center; font-size:13px; color:var(--dim); }
+  .chkrow input { width:auto; }
+  .banner { background:#3a1420; border:1px solid var(--err); color:var(--err);
+            padding:10px 20px; font-size:14px; display:none; }
+  h3.sub { margin:18px 0 6px; font-size:11px; color:var(--dim);
+           text-transform:uppercase; letter-spacing:.08em; }
+</style>
+</head>
+<body>
+<div class="banner" id="banner"></div>
+<header>
+  <h1>GLaDOS <span>· Configuration</span></h1>
+  <span class="pill" id="pill-hub">hub …</span>
+  <span class="pill" id="pill-asr">asr …</span>
+  <span class="pill" id="pill-cam">cameras …</span>
+  <span class="hint" style="margin-left:auto">changes apply live — no rebuild, no restart</span>
+</header>
+<main>
+
+  <section class="card" id="card-lights">
+    <h2>Kasa lights <button class="ghost" id="lights-reload">reload</button></h2>
+    <div class="body">
+      <table>
+        <thead><tr><th style="width:34%">name</th><th style="width:30%">ip</th>
+        <th style="width:22%">type</th><th></th></tr></thead>
+        <tbody id="lights-rows"></tbody>
+      </table>
+      <div style="margin-top:8px"><button class="ghost" id="lights-add">+ add light</button></div>
+      <h3 class="sub">groups</h3>
+      <table>
+        <thead><tr><th style="width:34%">group</th>
+        <th>members (comma-separated light names)</th><th></th></tr></thead>
+        <tbody id="groups-rows"></tbody>
+      </table>
+      <div style="margin-top:8px"><button class="ghost" id="groups-add">+ add group</button></div>
+
+  <section class="card" id="card-cameras">
+    <h2>Cameras (Scrypted NVR) <button class="ghost" id="cams-reload">reload</button></h2>
+    <div class="body">
+      <div id="cam-cards"></div>
+      <button class="ghost" id="cams-add">+ add camera</button>
+      <p class="hint">id = the Scrypted camera device id (the number in the
+      scrypted/&lt;id&gt;/ObjectDetector MQTT topic). classes = what to track
+      (e.g. person, package, vehicle). zones = hub-side whitelist of NVR zone
+      tags a detection must carry (empty = accept all; keep “packageZone” to
+      keep package announcements). Saving restarts the feed briefly to
+      re-subscribe.</p>
+      <div class="msg" id="cams-msg"></div>
+    </div>
+    <div class="foot"><span class="hint" id="cams-status"></span>
+      <button id="cams-save">Save cameras</button></div>
+  </section>
+
+  <section class="card" id="card-volume">
+    <h2>Speaker volume</h2>
+    <div class="body">
+      <table>
+        <thead><tr><th style="width:30%">device</th><th>volume</th>
+        <th style="width:70px">level</th></tr></thead>
+        <tbody id="vol-rows"></tbody>
+      </table>
+      <p class="hint" id="vol-empty">No speakers are connected right now —
+      volumes appear here as devices connect (the hub remembers them between
+      connections and across hub restarts).</p>
+      <div class="msg" id="vol-msg"></div>
+    </div>
+  </section>
+
+  <section class="card" id="card-prompt">
+    <h2>System prompt (personality) <button class="ghost" id="prompt-reload">reload</button></h2>
+    <div class="body">
+      <p class="hint">The base system prompt her replies are built from
+      (device capabilities are appended automatically and are NOT part of
+      this file). Saved changes take effect on her next reply — for live
+      conversations and new sessions alike.</p>
+      <textarea id="prompt-text" spellcheck="false"></textarea>
+      <div class="hint" id="prompt-count" style="margin-top:4px"></div>
+      <div class="msg" id="prompt-msg"></div>
+    </div>
+    <div class="foot"><button id="prompt-save">Save prompt</button></div>
+  </section>
+
+</main>
+<script>
+"use strict";
+const TOKEN = new URLSearchParams(location.search).get("token") || "";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"']/g,
+  (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+async function api(path, opts = {}) {
+  const sep = path.includes("?") ? "&" : "?";
+  const url = "/api/config" + path +
+    (TOKEN ? sep + "token=" + encodeURIComponent(TOKEN) : "");
+  const headers = Object.assign({}, opts.headers || {});
+  if (opts.body !== undefined) headers["Content-Type"] = "application/json";
+  if (TOKEN) headers["X-Config-Token"] = TOKEN;
+  const res = await fetch(url, Object.assign({}, opts, {headers}));
+  if (res.status === 401) {
+    const b = $("banner");
+    b.textContent = "Token required — open this page with ?token=… (GLADOS_CONFIG_TOKEN).";
+    b.style.display = "block";
+    throw new Error("unauthorized");
+  }
+  return res;
+}
+
+function msg(id, text, isErr) {
+  const el = $(id);
+  el.textContent = text || "";
+  el.className = "msg" + (text ? (isErr ? " err" : " ok") : "");
+}
+async function detail(res) {
+  try { return ((await res.json()).detail) || res.status; }
+  catch { return String(res.status); }
+}
+
+/* ── lights ─────────────────────────────────────────────────────── */
+let lights = {lights: {}, types: {}, groups: {}};
+
+function renderLights() {
+  const tb = $("lights-rows");
+  tb.innerHTML = "";
+  for (const [name, ip] of Object.entries(lights.lights || {})) {
+    const type = (lights.types || {})[name] || "plug";
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      '<td><input data-f="name" value="' + esc(name) + '"></td>' +
+      '<td><input data-f="ip" value="' + esc(ip) + '"></td>' +
+      '<td><select data-f="type">' +
+      ["plug", "bulb", "light"].map((t) =>
+        '<option' + (t === type ? " selected" : "") + ">" + t + "</option>").join("") +
+      "</select></td>" +
+      '<td><button class="danger" type="button">remove</button></td>';
+    tr.querySelector("button").onclick = () => { tr.remove(); };
+    tb.appendChild(tr);
+  }
+  const gb = $("groups-rows");
+  gb.innerHTML = "";
+  for (const [g, members] of Object.entries(lights.groups || {})) {
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      '<td><input data-f="name" value="' + esc(g) + '"></td>' +
+      '<td><input data-f="members" value="' + esc((members || []).join(", ")) + '"></td>' +
+      '<td><button class="danger" type="button">remove</button></td>';
+    tr.querySelector("button").onclick = () => { tr.remove(); };
+    gb.appendChild(tr);
+  }
+  $("lights-inventory").textContent =
+    "live: " + Object.keys(lights.lights || {}).length + " light(s), " +
+    Object.keys(lights.groups || {}).length + " group(s)";
+}
+
+function collectLights() {
+  const out = {lights: {}, types: {}, groups: {}};
+  document.querySelectorAll("#lights-rows tr").forEach((tr) => {
+    const g = (f) => tr.querySelector('[data-f="' + f + '"]').value.trim();
+    const name = g("name");
+    if (!name) return;
+    out.lights[name] = g("ip");
+    out.types[name] = g("type");
+  });
+  document.querySelectorAll("#groups-rows tr").forEach((tr) => {
+    const g = (f) => tr.querySelector('[data-f="' + f + '"]').value.trim();
+    const name = g("name");
+    if (!name) return;
+    out.groups[name] = g("members").split(",").map((s) => s.trim()).filter(Boolean);
+  });
+  return out;
+}
+
+async function loadLights() {
+  const res = await api("/lights");
+  if (!res.ok) return msg("lights-msg", "load failed: " + await detail(res), true);
+  lights = await res.json();
+  renderLights();
+}
+$("lights-add").onclick = () => {
+  const tr = document.createElement("tr");
+  tr.innerHTML = '<td><input data-f="name" placeholder="kitchen"></td>' +
+    '<td><input data-f="ip" placeholder="192.168.1.x"></td>' +
+    '<td><select data-f="type"><option>plug</option><option>bulb</option>' +
+    '<option>light</option></select></td>' +
+    '<td><button class="danger" type="button">remove</button></td>';
+  tr.querySelector("button").onclick = () => tr.remove();
+  $("lights-rows").appendChild(tr);
+};
+$("groups-add").onclick = () => {
+  const tr = document.createElement("tr");
+  tr.innerHTML = '<td><input data-f="name" placeholder="kitchen"></td>' +
+    '<td><input data-f="members" placeholder="kitchen, pantry"></td>' +
+    '<td><button class="danger" type="button">remove</button></td>';
+  tr.querySelector("button").onclick = () => tr.remove();
+  $("groups-rows").appendChild(tr);
+};
+$("lights-reload").onclick = loadLights;
+$("lights-save").onclick = async () => {
+  const names = Object.keys(collectLights().lights);
+  if (new Set(names).size !== names.length)
+    return msg("lights-msg", "duplicate light names — fix before saving", true);
+  const res = await api("/lights",
+    {method: "PUT", body: JSON.stringify(collectLights())});
+  if (res.ok) { msg("lights-msg", "saved — applied live"); await loadLights(); refreshStatus(); }
+  else msg("lights-msg", "save failed: " + await detail(res), true);
+};
+
+/* ── cameras ────────────────────────────────────────────────────── */
+let cams = {cameras: {}};
+
+function camCardHTML(name, spec) {
+  spec = spec || {};
+  const lines = Object.entries(spec.lines || {})
+    .map(([k, v]) => esc(k) + ": " + esc(v)).join("\n");
+  return (
+    '<div class="cam-card">' +
+    '<h3><span class="cam-name"></span>' +
+    '<button class="danger" type="button">remove camera</button></h3>' +
+    '<div class="grid2">' +
+    '<label>name (key)<input data-f="name" value="' + esc(name) + '"></label>' +
+    '<label>label (spoken)<input data-f="label" value="' + esc(spec.label || name) + '"></label>' +
+    '<label>scrypted id<input data-f="id" value="' + esc(spec.id || "") + '"></label>' +
+    '<label>cooldown (s)<input data-f="cooldown_s" type="number" min="0" step="5" value="' + esc(spec.cooldown_s ?? 90) + '"></label>' +
+    '<label>classes (comma-separated)<input data-f="classes" value="' + esc((spec.classes || []).join(", ")) + '"></label>' +
+    '<label>zones (comma-separated, empty = all)<input data-f="zones" value="' + esc((spec.zones || []).join(", ")) + '"></label>' +
+    "</div>" +
+    '<div class="grid2"><div class="chkrow">' +
+    '<input type="checkbox" data-f="announce"' + (spec.announce ? " checked" : "") + ">" +
+    "<span>auto-announce activity on the house speakers</span></div></div>" +
+    '<label class="stack" style="display:block;margin-top:8px">custom announcement lines (one per line: class: text)' +
+    '<textarea data-f="lines" rows="3">' + lines + "</textarea></label>" +
+    "</div>");
+}
+
+function renderCams() {
+  const box = $("cam-cards");
+  box.innerHTML = "";
+  const names = Object.keys(cams.cameras || {});
+  names.forEach((name) => box.insertAdjacentHTML("beforeend", camCardHTML(name, cams.cameras[name])));
+  box.querySelectorAll(".cam-card").forEach((card, i) => {
+    card.querySelector(".cam-name").textContent =
+      names[i] + " — " + (cams.cameras[names[i]] || {}).label;
+    card.querySelector("h3 .danger").onclick = () => { card.remove(); renderCams(); };
+  });
+  const st = (cams._status || {});
+  $("cams-status").textContent = st.connected
+    ? "feed connected · " + (st.cameras ? Object.keys(st.cameras).length : 0) + " camera(s)"
+    : "feed not connected";
+}
+function splitList(s) {
+  return String(s).split(",").map((x) => x.trim()).filter(Boolean);
+}
+function parseLines(text) {
+  const out = {};
+  for (const line of String(text).split("\n")) {
+    const i = line.indexOf(":");
+    if (i > 0) out[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+  }
+  return out;
+}
+function collectCams() {
+  const out = {cameras: {}};
+  $("cam-cards").querySelectorAll(".cam-card").forEach((card) => {
+    const g = (f) => card.querySelector('[data-f="' + f + '"]');
+    const name = g("name").value.trim();
+    if (!name) return;
+    out.cameras[name] = {
+      label: g("label").value.trim() || name,
+      id: g("id").value.trim(),
+      announce: g("announce").checked,
+      classes: splitList(g("classes").value),
+      zones: splitList(g("zones").value),
+      cooldown_s: Number(g("cooldown_s").value) || 0,
+      lines: parseLines(g("lines").value),
+    };
+  });
+  return out;
+}
+async function loadCams() {
+  const res = await api("/cameras");
+  if (!res.ok) return msg("cams-msg", "load failed: " + await detail(res), true);
+  cams = await res.json();
+  renderCams();
+}
+$("cams-add").onclick = () => {
+  const n = Object.keys(cams.cameras || {}).length + 1;
+  $("cam-cards").insertAdjacentHTML("beforeend", camCardHTML("camera" + n,
+    {label: "camera " + n, announce: false, classes: ["person"], zones: [], cooldown_s: 90}));
+  renderCams();
+};
+$("cams-reload").onclick = loadCams;
+$("cams-save").onclick = async () => {
+  const payload = collectCams();
+  for (const [n, s] of Object.entries(payload.cameras))
+    if (!s.id) return msg("cams-msg", "camera '" + n + "' needs its Scrypted id", true);
+  const res = await api("/cameras", {method: "PUT", body: JSON.stringify(payload)});
+  if (res.ok) {
+    const d = await res.json();
+    msg("cams-msg", "saved — feed re-subscribing" +
+      (d.monitor_running ? "" : " (monitor not running: check MQTT broker env)"));
+    await loadCams();
+    setTimeout(refreshStatus, 1500);
+
+/* ── volume ─────────────────────────────────────────────────────── */
+async function loadVolume() {
+  const res = await api("/volume");
+  if (!res.ok) return;
+  const vol = await res.json();
+  const tb = $("vol-rows");
+  tb.innerHTML = "";
+  $("vol-empty").style.display = Object.keys(vol).length ? "none" : "block";
+  for (const [dev, level] of Object.entries(vol)) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = "<td>" + esc(dev) + "</td>" +
+      '<td><input type="range" min="0" max="100" value="' + level + '" data-dev="' + esc(dev) + '"></td>' +
+      '<td class="hint">' + level + "%</td>";
+    const range = tr.querySelector("input");
+    range.oninput = () => { tr.querySelector("td.hint").textContent = range.value + "%"; };
+    range.onchange = async () => {
+      const r = await api("/volume", {method: "PUT",
+        body: JSON.stringify({device_id: dev, level: Number(range.value)})});
+      msg("vol-msg", r.ok ? dev + " → " + range.value + "%"
+        : "volume save failed: " + await detail(r), !r.ok);
+    };
+    tb.appendChild(tr);
+  }
+}
+
+/* ── system prompt ──────────────────────────────────────────────── */
+async function loadPrompt() {
+  const res = await api("/prompt");
+  if (!res.ok) return msg("prompt-msg", "load failed: " + await detail(res), true);
+  const d = await res.json();
+  const ta = $("prompt-text");
+  ta.value = d.prompt || "";
+  $("prompt-count").textContent = (d.prompt || "").length + " characters";
+}
+$("prompt-text").addEventListener("input", () => {
+  $("prompt-count").textContent = $("prompt-text").value.length + " characters";
+});
+$("prompt-reload").onclick = loadPrompt;
+$("prompt-save").onclick = async () => {
+  const res = await api("/prompt",
+    {method: "PUT", body: JSON.stringify({prompt: $("prompt-text").value})});
+  if (res.ok) { msg("prompt-msg", "saved — takes effect on her next reply"); loadPrompt(); }
+  else msg("prompt-msg", "save failed: " + await detail(res), true);
+};
+
+/* ── status pills ───────────────────────────────────────────────── */
+async function refreshStatus() {
+  const pill = (id, text, cls) => {
+    const el = $(id);
+    el.textContent = text;
+    el.className = "pill" + (cls ? " " + cls : "");
+  };
+  try {
+    const h = await (await fetch("/health")).json();
+    pill("pill-hub", "hub ok", "ok");
+    pill("pill-asr", "asr " + (h.asr_available ? "ok" : "DOWN"), h.asr_available ? "ok" : "bad");
+    const cam = h.cameras || {};
+    const n = cam.cameras ? Object.keys(cam.cameras).length : 0;
+    pill("pill-cam", cam.connected ? "feed ok · " + n + " cam" + (n === 1 ? "" : "s")
+      : "feed down", cam.connected ? "ok" : "bad");
+    if (!cams._status || JSON.stringify(cams._status) !== JSON.stringify(cam)) {
+      cams._status = cam;
+      renderCams();
+    }
+  } catch {
+    pill("pill-hub", "hub down", "bad");
+  }
+}
+
+/* ── init ───────────────────────────────────────────────────────── */
+loadLights();
+loadCams();
+loadVolume();
+loadPrompt();
+refreshStatus();
+setInterval(refreshStatus, 4000);
+</script>
+</body>
+</html>
+

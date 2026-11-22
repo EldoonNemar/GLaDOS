@@ -1,7 +1,8 @@
 """
 Kasa smart-light control (plugs + bulbs) via python-kasa.
 
-The registry (config/kasa.json, baked into the image; override with
+The registry (config/kasa.json — bind-mounted into the container, so it
+is live-editable via the hub's web UI; override the path with
 KASA_CONFIG_PATH) maps human names to LAN IPs and bundles lights into
 *groups*, so one utterance — "turn off the livingroom lights" — can
 reach three devices.
@@ -121,6 +122,20 @@ def set_registry(reg: LightRegistry) -> None:
     """Test seam: swap in a registry (e.g. built from a temp config)."""
     global REGISTRY
     REGISTRY = reg
+
+
+def reload() -> LightRegistry:
+    """Re-read kasa.json and swap it in as the live REGISTRY.
+
+    Called by the config server right after a write: new lights/groups
+    are resolved by the next tool call, no restart needed. A bad file
+    degrades to the existing registry's loader behavior (empty registry
+    + warning) — the same as booting with a bad file.
+    """
+    global REGISTRY
+    REGISTRY = LightRegistry.load()
+    logger.info("kasa registry reloaded: %s", REGISTRY.describe())
+    return REGISTRY
 
 
 async def _control_one(name: str, ip: str, state: str, brightness: int | None) -> tuple[bool, str]:
