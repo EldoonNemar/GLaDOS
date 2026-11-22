@@ -72,6 +72,14 @@ class FakeGpio:
         self.lines[pin] = line
         return line
 
+    def input(self, pin, label):
+        line = FakeLine()
+        self.lines[pin] = line
+        return line
+
+    def cleanup(self):
+        self.lines.clear()
+
 
 def _make_st7789():
     spi = FakeSpi()
@@ -198,6 +206,49 @@ class TestLafvinHatOpen(unittest.TestCase):
         spi_mod.SpiDev = Boom
         with mock.patch.dict(sys.modules, {"spidev": spi_mod}):
             self.assertIsNone(LafvinHat.try_open())
+
+    def test_open_wires_backlight_thread_with_stop_event(self):
+        # Regression: the backlight PWM thread was started without the
+        # stop_event that _SoftPwm.run requires — it died at startup and
+        # the panel stayed black even though frames were being pushed.
+        spi_mod = types.ModuleType("spidev")
+
+        class FakeSpiDev:
+            max_speed_hz = 0
+            mode = 0
+
+            def open(self, bus, cs):
+                pass
+
+            def close(self):
+                pass
+
+            def xfer2(self, data):
+                return data
+
+            def writebytes2(self, data):
+                return len(data)
+
+        spi_mod.SpiDev = FakeSpiDev
+        made = []
+        real_thread = threading.Thread
+
+        class SpyThread(real_thread):
+            def __init__(self, *a, **k):
+                made.append(k)
+                super().__init__(*a, **k)
+
+        hat = LafvinHat()
+        with mock.patch.dict(sys.modules, {"spidev": spi_mod}), \
+             mock.patch.object(lafvin, "_GpiodGpio", lambda: FakeGpio()), \
+             mock.patch.object(lafvin.threading, "Thread", SpyThread):
+            hat._open(spi_mod)
+        try:
+            bl = [k for k in made if k.get("name") == "lafvin-backlight"]
+            self.assertEqual(len(bl), 1)
+            self.assertEqual(bl[0].get("args"), (hat._stop_event,))
+        finally:
+            hat.close()
 
 
 # ── lafvin: gpiod chardev GPIO layer ──────────────────────────────────

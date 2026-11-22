@@ -235,7 +235,8 @@ class LafvinHat:
         bl = self._gpio.output(BACKLIGHT_PIN, "glados-backlight")
         self._backlight_pwm = _SoftPwm(bl, stop_value=0)
         self._backlight_pwm.set_duty(float(self._backlight))
-        threading.Thread(target=self._backlight_pwm.run, daemon=True,
+        threading.Thread(target=self._backlight_pwm.run,
+                         args=(self._stop_event,), daemon=True,
                          name="lafvin-backlight").start()
         self._button_line = self._gpio.input(BUTTON_PIN, "glados-button")
         self._button_stop.clear()
