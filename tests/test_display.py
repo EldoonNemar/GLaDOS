@@ -9,7 +9,10 @@ Pure logic only; no GPIO/SPI hardware. Spoke main.py is loaded the same way
 test_playback.py does (importlib, so `import main` can't collide).
 """
 import importlib.util
+import os
+import shutil
 import sys
+import tempfile
 import threading
 import types
 import unittest
@@ -180,8 +183,8 @@ class TestRgbLed(unittest.TestCase):
 # ── lafvin: graceful degradation ─────────────────────────────────────
 
 class TestLafvinHatOpen(unittest.TestCase):
-    def test_try_open_none_when_gpio_unavailable(self):
-        with mock.patch.dict(sys.modules, {"RPi.GPIO": None, "spidev": None}):
+    def test_try_open_none_when_spidev_unavailable(self):
+        with mock.patch.dict(sys.modules, {"spidev": None}):
             self.assertIsNone(LafvinHat.try_open())
 
     def test_try_open_none_when_spi_fails(self):
@@ -195,17 +198,61 @@ class TestLafvinHatOpen(unittest.TestCase):
                 pass
 
         spi_mod.SpiDev = Boom
-        gpio_mod = types.ModuleType("RPi.GPIO")
-        gpio_mod.BCM, gpio_mod.OUT, gpio_mod.IN, gpio_mod.PUD_UP = 1, 0, 1, 21
-        gpio_mod.setmode = lambda *a: None
-        gpio_mod.setwarnings = lambda *a: None
-        gpio_mod.setup = lambda *a, **k: None
-        gpio_mod.output = lambda *a, **k: None
-        gpio_mod.input = lambda *a: 0
-        gpio_mod.cleanup = lambda: None
-        with mock.patch.dict(sys.modules,
-                             {"RPi.GPIO": gpio_mod, "spidev": spi_mod}):
+        with mock.patch.dict(sys.modules, {"spidev": spi_mod}):
             self.assertIsNone(LafvinHat.try_open())
+
+
+# ── lafvin: sysfs GPIO layer ─────────────────────────────────────────
+
+class TestSysfsGpio(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        for name in ("export", "unexport"):
+            with open(os.path.join(self.tmp, name), "w"):
+                pass
+
+    def _mk_pin(self, pin):
+        d = os.path.join(self.tmp, f"gpio{pin}")
+        os.makedirs(d, exist_ok=True)
+        for fname, default in (("direction", "in"), ("value", "0"),
+                               ("pull", "off")):
+            with open(os.path.join(d, fname), "w") as f:
+                f.write(default)
+
+    def _read(self, pin, fname):
+        with open(os.path.join(self.tmp, f"gpio{pin}", fname)) as f:
+            return f.read().strip()
+
+    def test_output_sets_direction_and_value(self):
+        self._mk_pin(27)
+        g = lafvin._SysfsGpio(base=self.tmp)
+        line = g.output(27, "dc")
+        self.assertEqual(self._read(27, "direction"), "out")
+        line.set_value(1)
+        self.assertEqual(self._read(27, "value"), "1")
+        line.set_value(0)
+        self.assertEqual(self._read(27, "value"), "0")
+
+    def test_input_disables_bias_and_reads(self):
+        self._mk_pin(17)
+        g = lafvin._SysfsGpio(base=self.tmp)
+        line = g.input(17, "button")
+        self.assertEqual(self._read(17, "direction"), "in")
+        self.assertEqual(self._read(17, "pull"), "off")  # board pulls down
+        self.assertEqual(line.read(), 0)
+        with open(os.path.join(self.tmp, "gpio17", "value"), "w") as f:
+            f.write("1")
+        self.assertEqual(line.read(), 1)
+
+    def test_cleanup_unexports(self):
+        self._mk_pin(22)
+        g = lafvin._SysfsGpio(base=self.tmp)
+        g.output(22, "bl")
+        g.cleanup()
+        with open(os.path.join(self.tmp, "unexport")) as f:
+            self.assertEqual(f.read().strip(), "22")
+        self.assertEqual(g._pins, {})
 
 
 # ── face: rendering ──────────────────────────────────────────────────

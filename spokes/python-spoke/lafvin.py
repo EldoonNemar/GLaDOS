@@ -12,10 +12,13 @@ The ST7789 init sequence below is byte-for-byte the sequence LAFVIN ships
 (verified against their St7789Display) — do not "clean it up"; the panel
 timing/gamma values are panel-specific.
 
-spidev/RPi.GPIO are imported lazily so this module imports (and its classes
-are unit-testable with fakes) on machines without the HAT.
+spidev is imported lazily and GPIO goes through /sys/class/gpio (no
+RPi.GPIO — its C extension's Pi-ness check breaks inside containers, and
+gpiod adds a build dependency), so this module imports and its classes
+unit-test with fakes on machines without the HAT.
 """
 import logging
+import os
 import threading
 import time
 
@@ -199,14 +202,13 @@ class LafvinHat:
     @classmethod
     def try_open(cls, on_press=None) -> "LafvinHat | None":
         try:
-            import RPi.GPIO as GPIO  # noqa: F401
             import spidev
         except Exception as e:
             logger.warning("[LAFVIN] unavailable (%s) — display disabled", e)
             return None
         hat = cls(on_press=on_press)
         try:
-            hat._open(GPIO, spidev)
+            hat._open(spidev)
         except Exception as e:
             logger.warning("[LAFVIN] open failed (%s) — display disabled", e)
             hat.close()
@@ -214,10 +216,8 @@ class LafvinHat:
         logger.info("[LAFVIN] HAT ready (ST7789 240x280 @ %d MHz)", SPI_SPEED_HZ)
         return hat
 
-    def _open(self, GPIO, spidev):
-        GPIO.setmode(GPIO.BCM)
-        GPIO.setwarnings(False)
-        self._gpio = _Gpio(GPIO)
+    def _open(self, spidev):
+        self._gpio = _SysfsGpio()
         self._spi = _Spi(spidev)
         self._spi.open(SPI_BUS, SPI_CS, SPI_SPEED_HZ)
         self.display = St7789(
@@ -276,38 +276,87 @@ class LafvinHat:
             self._gpio.cleanup()
 
 
-class _Gpio:
-    """Thin wrapper so fakes in tests don't need RPi.GPIO semantics."""
+class _SysfsGpio:
+    """/sys/class/gpio GPIO — works in a --privileged container with no
+    extra build deps. `base` is overridable so tests point at a fake
+    sysfs tree."""
 
-    def __init__(self, GPIO):
-        self._gpio = GPIO
+    def __init__(self, base: str = "/sys/class/gpio"):
+        self.base = base
+        self._pins: dict[int, "_SysfsLine"] = {}
 
-    def output(self, pin: int, label: str):
-        self._gpio.setup(pin, self._gpio.OUT)
-        self._gpio.output(pin, 0)
-        return _Line(self._gpio, pin)
+    def output(self, pin: int, label: str = ""):
+        self._export(pin)
+        self._write(f"gpio{pin}/direction", "out")
+        line = _SysfsLine(self, pin)
+        self._pins[pin] = line
+        return line
 
-    def input(self, pin: int, label: str):
-        self._gpio.setup(pin, self._gpio.IN, pull_up_down=self._gpio.PUD_UP)
-        return _Line(self._gpio, pin)
+    def input(self, pin: int, label: str = ""):
+        self._export(pin)
+        self._write(f"gpio{pin}/direction", "in")
+        # The HAT pulls the button line down on the board; the SoC bias
+        # must stay OFF (fighting the two biases makes the idle level
+        # indeterminate). HIGH = pressed, LOW = released.
+        try:
+            self._write(f"gpio{pin}/pull", "off")
+        except OSError:
+            pass
+        line = _SysfsLine(self, pin)
+        self._pins[pin] = line
+        return line
+
+    def _export(self, pin: int):
+        d = os.path.join(self.base, f"gpio{pin}")
+        if os.path.isdir(d):
+            return  # already exported (possibly by an earlier run)
+        try:
+            with open(os.path.join(self.base, "export"), "w") as f:
+                f.write(str(pin))
+        except OSError:
+            pass
+        for _ in range(200):
+            if os.path.isdir(d):
+                return
+            time.sleep(0.001)
+        raise OSError(f"gpio{pin}: export did not appear")
+
+    def _write(self, relpath: str, value: str):
+        p = os.path.join(self.base, relpath)
+        for _ in range(200):  # sysfs files can lag the export briefly
+            try:
+                with open(p, "w") as f:
+                    f.write(value)
+                return
+            except OSError:
+                time.sleep(0.001)
+        raise OSError(f"gpio write to {relpath} timed out")
 
     def cleanup(self):
-        try:
-            self._gpio.cleanup()
-        except Exception:
-            pass
+        for pin in list(self._pins):
+            try:
+                with open(os.path.join(self.base, "unexport"), "w") as f:
+                    f.write(str(pin))
+            except OSError:
+                pass
+            self._pins.pop(pin, None)
 
 
-class _Line:
-    def __init__(self, GPIO, pin):
-        self._gpio = GPIO
+class _SysfsLine:
+    def __init__(self, gpio: _SysfsGpio, pin: int):
+        self._gpio = gpio
         self._pin = pin
 
     def set_value(self, value: int):
-        self._gpio.output(self._pin, 1 if value else 0)
+        self._gpio._write(f"gpio{self._pin}/value", "1" if value else "0")
 
     def read(self) -> int:
-        return 1 if self._gpio.input(self._pin) else 0
+        try:
+            with open(os.path.join(self._gpio.base, f"gpio{self._pin}",
+                                   "value")) as f:
+                return int(f.read().strip() or "0")
+        except (OSError, ValueError):
+            return 0
 
 
 class _Spi:
