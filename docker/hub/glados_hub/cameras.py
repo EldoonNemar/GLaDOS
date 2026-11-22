@@ -42,6 +42,8 @@ try:
 except ImportError:  # pragma: no cover
     mqtt = None
 
+from . import quiet
+
 # ── Configuration (env, see .env / docker-compose.yml) ─────────────────
 MQTT_HOST = os.environ.get("SCRYPTED_MQTT_HOST", "")
 MQTT_PORT = int(os.environ.get("SCRYPTED_MQTT_PORT", "1883"))
@@ -264,6 +266,9 @@ class CameraMonitor:
         self._queue: asyncio.Queue | None = None
         self._started = False
         self.announce_fn = None
+        # Recent events that hit quiet hours and were NOT announced (so
+        # check_camera can report them honestly: quiet != didn't happen).
+        self.suppressed: deque = deque(maxlen=50)
         self._topic_re = re.compile(r"^scrypted/(\d+)/ObjectDetector$")
         self._id_to_name = {cid: name for name, cid in cameras.items()}
 
@@ -356,6 +361,18 @@ class CameraMonitor:
                 line = self.lines.get(name, {}).get(cls) or ANNOUNCE_LINES.get(cls)
                 if not line or self.announce_fn is None:
                     continue
+                if quiet.is_active("camera"):
+                    # Still record it: "quiet" must not mean "didn't happen" —
+                    # check_camera reports suppressed events so the answer to
+                    # "did anyone come in?" stays the truth.
+                    self.suppressed.append({
+                        "ts": time.strftime("%H:%M"),
+                        "camera": name,
+                        "cls": cls,
+                    })
+                    logger.info("camera: %s activity at %s — suppressed (quiet hours)",
+                                cls, name)
+                    continue
                 logger.info("camera: %s activity at %s — announcing", cls, name)
                 try:
                     report = await self.announce_fn(line, "")
@@ -370,6 +387,7 @@ class CameraMonitor:
             "connected": self.connected,
             "last_error": self.last_error,
             "cameras": {name: tracker.camera_id for name, tracker in self.trackers.items()},
+            "suppressed_recent": list(self.suppressed),
         }
 
 
@@ -518,7 +536,15 @@ def check_camera(camera: str = "front") -> str:
         )
     report = MONITOR.trackers[camera].describe(MONITOR.connected)
     # The tracker reports by camera id ("65 camera"); the user says "front".
-    return report.replace(f"{MONITOR.cameras[camera]} camera", f"{display} camera")
+    report = report.replace(f"{MONITOR.cameras[camera]} camera", f"{display} camera")
+    # Honest record of quiet hours: suppressed events still happened.
+    sup = [s for s in MONITOR.suppressed if s["camera"] == camera]
+    if sup:
+        last = sup[-1]
+        report += (f" Note: {len(sup)} announcement(s) for this camera were "
+                   f"suppressed by quiet hours (last: {last['cls']} at "
+                   f"{last['ts']}) — they still happened.")
+    return report
 
 
 def status() -> dict | None:

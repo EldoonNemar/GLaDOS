@@ -42,6 +42,7 @@ from . import cameras
 from . import config_server
 from . import decision
 from . import kasa_lights
+from . import quiet
 from . import llm as llm_client
 from . import skills
 from . import timers
@@ -111,7 +112,11 @@ def _build_system_prompt() -> str:
     """
     base = PROMPT_PATH.read_text()
     caps = skills.describe_capabilities()
-    return base + ("\n\n" + caps if caps else "")
+    prompt = base + ("\n\n" + caps if caps else "")
+    q = quiet.CONFIG.describe()
+    if q:
+        prompt += "\n\n" + q
+    return prompt
 
 
 # Tool surface (lights/timers/announcements) + the actual device inventory,
@@ -560,6 +565,12 @@ async def _respond(session: Session, ws: WebSocket, text: str, why: str, extra_c
             return
         session.add_message("assistant", reply)
         logger.info("[%s] GLaDOS (%s): '%s'", session.device_id, why, reply[:120])
+        if quiet.is_active("responses"):
+            # Silent compliance: any tools already ran (lights DID switch),
+            # the reply stays in context, she just does not speak.
+            logger.info("[%s] reply suppressed (quiet hours)", session.device_id)
+            session.followup_until = time.monotonic() + FOLLOWUP_WINDOW_S
+            return
         await _send_led(ws, LED_SPEAK)
         await _stream_tts(ws, reply, session)
         played = True
@@ -878,6 +889,9 @@ def _nag_note(label: str) -> str:
 async def _speak_to_one_device(device_id: str, text: str, label: str = "") -> str:
     """Timer-fire path: speak to exactly one device — and keep nagging until
     the user says something (barge-in stops it). Returns a short report."""
+    if quiet.is_active("timers"):
+        logger.info("timer '%s' for %s: suppressed (quiet hours)", label, device_id)
+        return "suppressed by quiet hours — no nag was rung"
     s = active_sessions.get(device_id)
     if s is None or s.ws is None:
         return "device not connected"

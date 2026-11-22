@@ -18,6 +18,7 @@ import logging
 
 from . import cameras
 from . import kasa_lights
+from . import quiet
 from . import timers
 
 logger = logging.getLogger("glados_hub.skills")
@@ -307,6 +308,14 @@ async def execute_tool(name: str, args: dict, speaker: str) -> str:
         if name == "list_timers":
             return TIMER_STORE.list_active()
         if name == "announce":
+            if quiet.is_active("responses"):
+                # A user-requested announcement is still "her talking" —
+                # quiet hours cover it. Report it so the LLM doesn't claim
+                # it was spoken.
+                logger.info("announce tool suppressed (quiet hours): %r",
+                            args.get("message", ""))
+                return ("quiet hours: the announcement was NOT spoken — do "
+                        "not claim it was")
             if _announce is None:
                 return "announcements unavailable (hub not started)"
             return await asyncio.wait_for(

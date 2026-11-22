@@ -1275,6 +1275,7 @@ class _FakeCameraMonitor:
         self.connected = connected
         self.cameras = cameras
         self.trackers = trackers
+        self.suppressed = []  # quiet-hours events (list; the real one is a deque)
 
 
 class TestCheckCamera(unittest.TestCase):

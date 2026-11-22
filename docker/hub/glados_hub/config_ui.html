@@ -59,6 +59,9 @@
   .stack label input, .stack label textarea { margin-top:4px; }
   .chkrow { display:flex; gap:8px; align-items:center; font-size:13px; color:var(--dim); }
   .chkrow input { width:auto; }
+  .q-days label, .q-srcs label { display:inline-flex; gap:3px; margin-right:7px;
+        font-size:12px; color:var(--dim); white-space:nowrap; }
+  .q-days input, .q-srcs input { width:auto; }
   .banner { background:#3a1420; border:1px solid var(--err); color:var(--err);
             padding:10px 20px; font-size:14px; display:none; }
   h3.sub { margin:18px 0 6px; font-size:11px; color:var(--dim);
@@ -92,6 +95,11 @@
         <tbody id="groups-rows"></tbody>
       </table>
       <div style="margin-top:8px"><button class="ghost" id="groups-add">+ add group</button></div>
+      <div class="msg" id="lights-msg"></div>
+    </div>
+    <div class="foot"><span class="hint" id="lights-inventory"></span>
+      <button id="lights-save">Save lights</button></div>
+  </section>
 
   <section class="card" id="card-cameras">
     <h2>Cameras (Scrypted NVR) <button class="ghost" id="cams-reload">reload</button></h2>
@@ -108,6 +116,30 @@
     </div>
     <div class="foot"><span class="hint" id="cams-status"></span>
       <button id="cams-save">Save cameras</button></div>
+  </section>
+
+  <section class="card" id="card-quiet">
+    <h2>Quiet hours <button class="ghost" id="quiet-reload">reload</button></h2>
+    <div class="body">
+      <div class="grid2">
+        <label>timezone (IANA, e.g. America/Chicago)<input id="quiet-tz" spellcheck="false"></label>
+        <div class="chkrow" style="align-self:center"><span class="hint" id="quiet-now"></span></div>
+      </div>
+      <table>
+        <thead><tr><th style="width:18%">name</th><th style="width:110px">start</th>
+        <th style="width:110px">end</th><th>days</th><th>silences</th><th></th></tr></thead>
+        <tbody id="quiet-rows"></tbody>
+      </table>
+      <div style="margin-top:8px"><button class="ghost" id="quiet-add">+ add window</button></div>
+      <p class="hint">Time windows where GLaDOS does not talk. If end is before
+      start, the window crosses midnight (22:00–07:00). Days: M=Mon…S=Sun.
+      Silences: <b>camera</b> = proactive camera alerts (events are still
+      recorded and check_camera reports them), <b>timers</b> = fired-timer
+      beeps, <b>responses</b> = her replies — commands are still executed
+      silently during quiet hours, she just does not speak.</p>
+      <div class="msg" id="quiet-msg"></div>
+    </div>
+    <div class="foot"><button id="quiet-save">Save quiet hours</button></div>
   </section>
 
   <section class="card" id="card-volume">
@@ -359,6 +391,94 @@ $("cams-save").onclick = async () => {
     await loadCams();
     setTimeout(refreshStatus, 1500);
 
+/* ── quiet hours ──────────────────────────────────────────────────── */
+let quietCfg = {timezone: "America/Chicago", windows: []};
+const QUIET_SOURCES = ["camera", "timers", "responses"];
+const QUIET_DAY_LETTERS = ["M", "T", "W", "T", "F", "S", "S"];
+
+function quietRowHTML(w) {
+  w = w || {name: "", start: "22:00", end: "07:00",
+            days: [0, 1, 2, 3, 4, 5, 6], sources: QUIET_SOURCES.slice()};
+  const days = (w.days && w.days.length) ? w.days : [0, 1, 2, 3, 4, 5, 6];
+  const sources = w.sources || QUIET_SOURCES;
+  let dayChk = "", srcChk = "";
+  QUIET_DAY_LETTERS.forEach((d, i) => {
+    dayChk += '<label title="day ' + i + ' (0=Mon)">' +
+      '<input type="checkbox" class="q-day" data-d="' + i + '"' +
+      (days.includes(i) ? " checked" : "") + ">" + d + "</label>";
+  });
+  QUIET_SOURCES.forEach((s) => {
+    srcChk += '<label><input type="checkbox" class="q-src" data-s="' + s + '"' +
+      (sources.includes(s) ? " checked" : "") + ">" + s + "</label>";
+  });
+  return '<tr><td><input data-f="name" value="' + esc(w.name) + '" placeholder="night"></td>' +
+    '<td><input type="time" data-f="start" value="' + esc(w.start) + '"></td>' +
+    '<td><input type="time" data-f="end" value="' + esc(w.end) + '"></td>' +
+    '<td class="q-days">' + dayChk + '</td>' +
+    '<td class="q-srcs">' + srcChk + '</td>' +
+    '<td><button class="danger" type="button">remove</button></td></tr>';
+}
+
+function renderQuiet() {
+  const tb = $("quiet-rows");
+  tb.innerHTML = "";
+  (quietCfg.windows || []).forEach((w) => tb.insertAdjacentHTML("beforeend", quietRowHTML(w)));
+  tb.querySelectorAll("tr").forEach((tr) => {
+    tr.querySelector(".danger").onclick = () => { tr.remove(); };
+  });
+  $("quiet-tz").value = quietCfg.timezone || "America/Chicago";
+}
+
+function collectQuiet() {
+  const windows = [];
+  $("quiet-rows").querySelectorAll("tr").forEach((tr) => {
+    const name = tr.querySelector('[data-f="name"]').value.trim();
+    const start = tr.querySelector('[data-f="start"]').value;
+    const end = tr.querySelector('[data-f="end"]').value;
+    if (!name && !start && !end) return;
+    windows.push({
+      name, start, end,
+      days: [...tr.querySelectorAll(".q-day:checked")].map((c) => Number(c.dataset.d)),
+      sources: [...tr.querySelectorAll(".q-src:checked")].map((c) => c.dataset.s),
+    });
+  });
+  return {timezone: $("quiet-tz").value.trim(), windows};
+}
+
+async function loadQuiet() {
+  const res = await api("/quiet");
+  if (!res.ok) return msg("quiet-msg", "load failed: " + await detail(res), true);
+  quietCfg = await res.json();
+  renderQuiet();
+  updateQuietNow(quietCfg.status);
+}
+
+function updateQuietNow(st) {
+  if (!st) return;
+  $("quiet-now").textContent = st.quiet
+    ? "QUIET NOW until " + st.ends_at + " (" + (st.windows || []).join(", ") + ")"
+    : "not quiet — hub time " + st.now + " " + (st.timezone || "");
+  $("quiet-now").style.color = st.quiet ? "var(--ok)" : "";
+}
+
+$("quiet-add").onclick = () => {
+  $("quiet-rows").insertAdjacentHTML("beforeend", quietRowHTML());
+};
+$("quiet-reload").onclick = loadQuiet;
+$("quiet-save").onclick = async () => {
+  const payload = collectQuiet();
+  if (!payload.timezone) return msg("quiet-msg", "timezone is required", true);
+  const res = await api("/quiet", {method: "PUT", body: JSON.stringify(payload)});
+  if (res.ok) {
+    const d = await res.json();
+    const names = (d.config.windows || []).map((w) => w.name);
+    msg("quiet-msg", "saved — " + (names.length ? names.join(", ") : "no windows") +
+      (d.status.quiet ? " · QUIET NOW" : ""));
+    updateQuietNow(d.status);
+    await loadQuiet();
+  } else msg("quiet-msg", "save failed: " + await detail(res), true);
+};
+
 /* ── volume ─────────────────────────────────────────────────────── */
 async function loadVolume() {
   const res = await api("/volume");
@@ -423,6 +543,12 @@ async function refreshStatus() {
       cams._status = cam;
       renderCams();
     }
+    // Quiet-hours live indicator (separate endpoint: it's token-gated like
+    // the rest of /api/config).
+    try {
+      const cr = await api("/status");
+      if (cr.ok) updateQuietNow((await cr.json()).quiet);
+    } catch { /* 401 banner handles it */ }
   } catch {
     pill("pill-hub", "hub down", "bad");
   }
@@ -431,6 +557,7 @@ async function refreshStatus() {
 /* ── init ───────────────────────────────────────────────────────── */
 loadLights();
 loadCams();
+loadQuiet();
 loadVolume();
 loadPrompt();
 refreshStatus();

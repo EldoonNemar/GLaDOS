@@ -1,0 +1,5 @@
+{
+  "_doc": "Quiet hours for glados_hub (see glados_hub/quiet.py). Time windows where GLaDOS does not talk. 'timezone' is REQUIRED \u2014 an IANA zone like 'America/Chicago' (the hub container runs UTC, so 'local time' means nothing in here). 'windows': a list of {name, start, end, days, sources}. start/end are 'HH:MM' 24-hour; end < start means the window crosses midnight (22:00-07:00). days is 0=Mon..6=Sun (default: every day). sources picks what gets silenced: 'camera' = proactive camera-event announcements (events are still recorded, so check_camera reports them honestly), 'timers' = fired-timer nag beeps, 'responses' = her conversational replies \u2014 NOTE commands are still executed silently during quiet hours, she just does not speak. This file is bind-mounted into the hub container and editable LIVE via the web UI at http://<hub>:5051/ (Quiet hours section); no rebuild needed.",
+  "timezone": "America/Chicago",
+  "windows": []
+}

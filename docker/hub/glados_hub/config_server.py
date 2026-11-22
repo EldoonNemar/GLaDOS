@@ -47,6 +47,7 @@ from fastapi.responses import HTMLResponse
 
 from . import cameras
 from . import kasa_lights
+from . import quiet
 
 logger = logging.getLogger("glados_hub.config")
 
@@ -55,6 +56,7 @@ logger = logging.getLogger("glados_hub.config")
 # path is the baked prompts/ dir (also bind-mounted in production).
 KASA_PATH = kasa_lights.CONFIG_PATH
 CAMERAS_PATH = cameras.CONFIG_PATH
+QUIET_PATH = quiet.CONFIG_PATH
 PROMPT_PATH = Path(__file__).parent / "prompts" / "glados_system.txt"
 UI_PATH = Path(__file__).parent / "config_ui.html"
 
@@ -226,6 +228,37 @@ def apply_cameras() -> bool:
     return cameras.reload()
 
 
+# ── quiet hours (quiet_hours.json) ──────────────────────────────────
+
+
+def read_quiet() -> dict:
+    return _read_json(QUIET_PATH)
+
+
+def write_quiet(raw: dict) -> dict:
+    """Validate + atomically write quiet_hours.json; returns the written
+    config. The client may send just {"timezone", "windows"} — _doc is
+    preserved from the file."""
+    if not isinstance(raw, dict):
+        raise ConfigError("top level must be a JSON object")
+    try:
+        quiet.validate(raw)
+    except quiet.QuietConfigError as e:
+        raise ConfigError(str(e)) from e
+    out = _preserve_doc(_read_json(QUIET_PATH), raw)
+    for key in ("timezone", "windows"):
+        if key in raw:
+            out[key] = raw[key]
+    _atomic_write_json(QUIET_PATH, out)
+    return out
+
+
+def apply_quiet() -> dict:
+    """Re-read quiet_hours.json; the enforcement points check it live."""
+    quiet.reload()
+    return quiet.status()
+
+
 # ── hub-injected seams (avoid importing the hub) ─────────────────────
 
 # () -> None — called after any successful config write; the hub rebuilds
@@ -308,6 +341,28 @@ async def put_cameras(payload: dict) -> dict:
     return {"ok": True, "config": written, "monitor_running": running}
 
 
+@router.get("/api/config/quiet")
+async def get_quiet() -> dict:
+    out = read_quiet()
+    out["status"] = quiet.status()
+    return out
+
+
+@router.put("/api/config/quiet")
+async def put_quiet(payload: dict) -> dict:
+    try:
+        written = write_quiet(payload)
+    except ConfigError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    st = apply_quiet()
+    logger.info("config: quiet hours saved from UI — %s",
+                ", ".join(w["name"] for w in written.get("windows", []))
+                or "no windows")
+    if _on_changed:
+        _on_changed()
+    return {"ok": True, "config": written, "status": st}
+
+
 @router.get("/api/config/prompt")
 async def get_prompt() -> dict:
     return {"prompt": read_prompt()}
@@ -351,4 +406,5 @@ async def status() -> dict:
         "cameras": cameras.status(),
         "cameras_configured": sorted(cameras.CONFIG.cameras),
         "lights": kasa_lights.REGISTRY.describe(),
+        "quiet": quiet.status(),
     }

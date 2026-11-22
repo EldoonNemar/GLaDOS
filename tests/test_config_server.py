@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "docker" / "hub"))
 from glados_hub import cameras  # noqa: E402
 from glados_hub import config_server  # noqa: E402
 from glados_hub import kasa_lights  # noqa: E402
+from glados_hub import quiet  # noqa: E402
 from glados_hub import skills  # noqa: E402
 
 try:
@@ -55,13 +56,16 @@ class _Paths:
         self.cams = self.root / "cameras.json"
         self.prompt = self.root / "prompt.txt"
         self.ui = self.root / "ui.html"
+        self.quiet = self.root / "quiet_hours.json"
         self._patches = [
             mock.patch.object(config_server, "KASA_PATH", self.kasa),
             mock.patch.object(config_server, "CAMERAS_PATH", self.cams),
             mock.patch.object(config_server, "PROMPT_PATH", self.prompt),
             mock.patch.object(config_server, "UI_PATH", self.ui),
+            mock.patch.object(config_server, "QUIET_PATH", self.quiet),
             mock.patch.object(kasa_lights, "CONFIG_PATH", self.kasa),
             mock.patch.object(cameras, "CONFIG_PATH", self.cams),
+            mock.patch.object(quiet, "CONFIG_PATH", self.quiet),
             # No broker in tests: cameras.reload() re-reads config but
             # keeps the monitor OFF (is_configured() is False).
             mock.patch.object(cameras, "MQTT_HOST", ""),
@@ -74,6 +78,7 @@ class _Paths:
         self._saved_reg = kasa_lights.REGISTRY
         self._saved_cfg = cameras.CONFIG
         self._saved_mon = cameras.MONITOR
+        self._saved_quiet = quiet.CONFIG
         self._saved_on_changed = config_server._on_changed
         self._saved_vol = config_server._volume_api
         self.changed = []
@@ -90,6 +95,7 @@ class _Paths:
             except Exception:
                 pass
         cameras.MONITOR = self._saved_mon
+        quiet.CONFIG = self._saved_quiet
         config_server.set_on_changed(self._saved_on_changed)
         config_server.set_volume_api(self._saved_vol)
         self.tmp.cleanup()
@@ -401,6 +407,11 @@ class TestConfigEndpoints(unittest.TestCase):
         self.p.cams.write_text(json.dumps(CAMS))
         self.p.prompt.write_text("base prompt")
         self.p.ui.write_text("<html>TEST UI</html>")
+        self.p.quiet.write_text(json.dumps({
+            "_doc": "keep me",
+            "timezone": "America/Chicago",
+            "windows": [{"name": "night", "start": "22:00", "end": "07:00"}],
+        }))
         self.vol = _FakeVolumeApi()
         config_server.set_volume_api(self.vol)
         from fastapi import FastAPI
@@ -486,6 +497,52 @@ class TestConfigEndpoints(unittest.TestCase):
     def test_put_prompt_rejects_empty(self):
         res = self.client.put("/api/config/prompt", json={"prompt": "  "})
         self.assertEqual(res.status_code, 400)
+
+    # ── quiet hours ────────────────────────────────────────────────
+    def test_get_quiet_includes_status(self):
+        res = self.client.get("/api/config/quiet")
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        self.assertEqual(body["timezone"], "America/Chicago")
+        self.assertEqual(body["windows"][0]["name"], "night")
+        self.assertIn("status", body)
+        self.assertIn("quiet", body["status"])
+
+    def test_put_quiet_writes_reloads_preserves_doc(self):
+        res = self.client.put("/api/config/quiet", json={
+            "timezone": "America/Chicago",
+            "windows": [{"name": "night", "start": "22:00", "end": "07:00"},
+                        {"name": "lunch", "start": "12:00", "end": "13:00",
+                         "sources": ["timers"]}],
+        })
+        self.assertEqual(res.status_code, 200)
+        self.assertTrue(res.json()["ok"])
+        on_disk = json.loads(self.p.quiet.read_text())
+        self.assertEqual(len(on_disk["windows"]), 2)
+        self.assertEqual(on_disk["_doc"], "keep me")       # doc preserved
+        # Hot reload: the live config reflects the change, hook fired.
+        self.assertEqual([w.name for w in quiet.CONFIG.windows], ["night", "lunch"])
+        self.assertTrue(self.p.changed)
+
+    def test_put_quiet_rejects_bad_timezone(self):
+        before = self.p.quiet.read_text()
+        res = self.client.put("/api/config/quiet",
+                              json={"timezone": "Mars/Olympus", "windows": []})
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(self.p.quiet.read_text(), before)
+        self.assertFalse(self.p.changed)
+
+    def test_put_quiet_rejects_start_equals_end(self):
+        res = self.client.put("/api/config/quiet", json={
+            "timezone": "UTC",
+            "windows": [{"name": "x", "start": "07:00", "end": "07:00"}],
+        })
+        self.assertEqual(res.status_code, 400)
+
+    def test_status_includes_quiet(self):
+        res = self.client.get("/api/config/status")
+        self.assertEqual(res.status_code, 200)
+        self.assertIn("quiet", res.json())
 
     # ── volume ─────────────────────────────────────────────────────
     def test_volume_get_and_set(self):
