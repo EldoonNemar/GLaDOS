@@ -1584,5 +1584,103 @@ class TestCameraConfigDrivesPolicy(unittest.TestCase):
         self.assertNotIn("package", mon.lines.get("back", {}))
 
 
+@unittest.skipUnless(hub is not None, "hub import failed")
+class TestVolumeTools(unittest.TestCase):
+    """set_volume/get_volume: per-device state, clamping, the 0x16 frame,
+    and the tools must stay honest when the hub isn't wired up."""
+
+    def setUp(self):
+        self._saved = dict(hub.VOLUME)
+        self._saved_fn = skills._volume_fn
+        self.sent = []
+        sent = self.sent  # closure: the fake must append to the TEST's list
+
+        class _FakeWs:
+            async def send_bytes(self, data):
+                sent.append(data)
+
+        self.ws = _FakeWs()
+
+    def tearDown(self):
+        hub.VOLUME.clear()
+        hub.VOLUME.update(self._saved)
+        skills._volume_fn = self._saved_fn
+
+    def test_apply_volume_absolute_and_clamp(self):
+        self.assertEqual(hub.apply_volume("d1", level=80), 80)
+        self.assertEqual(hub.get_volume("d1"), 80)
+        self.assertEqual(hub.apply_volume("d1", level=150), 100)
+        self.assertEqual(hub.apply_volume("d1", level=-5), 0)
+        # per-device isolation
+        self.assertEqual(hub.get_volume("d2"), 100)
+
+    def test_apply_volume_relative(self):
+        hub.apply_volume("d1", level=70)
+        self.assertEqual(hub.apply_volume("d1", change=-10), 60)
+        self.assertEqual(hub.apply_volume("d1", change=500), 100)
+        self.assertEqual(hub.apply_volume("d1", change=-500), 0)
+
+    def test_apply_volume_requires_argument(self):
+        with self.assertRaises(ValueError):
+            hub.apply_volume("d1")
+
+    def test_send_volume_frame_is_0x16_int16le(self):
+        asyncio.run(hub._send_volume(self.ws, 65))
+        self.assertEqual(self.sent, [b"\x16" + (65).to_bytes(2, "little")])
+
+    def test_volume_tool_sets_state_and_sends_frame(self):
+        class _S:
+            ws = self.ws
+            glados_speaking = False
+
+        hub.active_sessions["d1"] = _S()
+        try:
+            out = asyncio.run(hub._volume_tool("d1", level=42))
+            self.assertIn("42%", out)
+            self.assertEqual(self.sent, [b"\x16" + (42).to_bytes(2, "little")])
+            out = asyncio.run(hub._volume_tool("d1", change=-100))
+            self.assertIn("muted", out)
+            self.assertEqual(hub.get_volume("d1"), 0)
+            out = asyncio.run(hub._volume_tool("d1", report=True))
+            self.assertIn("0%", out)
+        finally:
+            hub.active_sessions.pop("d1", None)
+
+    def test_skills_dispatch_set_and_get(self):
+        calls = []
+
+        async def fake(device_id, level=None, change=None, report=False):
+            calls.append((device_id, level, change, report))
+            return "fake"
+
+        skills.set_volume_fn(fake)
+        out = asyncio.run(skills.execute_tool("set_volume", {"level": 50}, "dev1"))
+        self.assertEqual(out, "fake")
+        self.assertEqual(calls[-1], ("dev1", 50, None, False))
+        asyncio.run(skills.execute_tool("set_volume", {"change": "-10"}, "dev1"))
+        self.assertEqual(calls[-1], ("dev1", None, -10, False))
+        asyncio.run(skills.execute_tool("get_volume", {}, "dev1"))
+        self.assertEqual(calls[-1], ("dev1", None, None, True))
+        # set_volume with neither arg degrades to a report, not an error
+        asyncio.run(skills.execute_tool("set_volume", {}, "dev1"))
+        self.assertEqual(calls[-1], ("dev1", None, None, True))
+        # bad args
+        out = asyncio.run(skills.execute_tool("set_volume", {"level": "abc"}, "dev1"))
+        self.assertIn("must be integers", out)
+
+    def test_skills_dispatch_unwired_is_honest(self):
+        skills.set_volume_fn(None)
+        out = asyncio.run(skills.execute_tool("set_volume", {"level": 50}, "dev1"))
+        self.assertIn("unavailable", out)
+        out = asyncio.run(skills.execute_tool("get_volume", {}, "dev1"))
+        self.assertIn("unavailable", out)
+
+    def test_volume_tools_on_surface_and_prompt(self):
+        names = [t["function"]["name"] for t in skills.TOOLS]
+        self.assertIn("set_volume", names)
+        self.assertIn("get_volume", names)
+        self.assertIn("set_volume", skills.describe_capabilities())
+
+
 if __name__ == "__main__":
     unittest.main()

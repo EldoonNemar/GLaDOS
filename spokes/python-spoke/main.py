@@ -4,6 +4,7 @@ GLaDOS Python Spoke - XVF3800 (arecord/aplay) <-> hub WebSocket.
 Pushes 16 kHz mono int16 PCM to the hub in realtime (0x01 frames, 100 ms).
 Plays streamed TTS audio (0x11 frames, 24 kHz int16) as it arrives, with
 low-latency chunked playback. 0x12 = stop playback immediately (barge-in).
+0x16 = set playback volume (int16 LE, 0-100).
 """
 import asyncio
 import logging
@@ -26,6 +27,22 @@ PLAYBACK_DEVICE = os.environ.get("GLADOS_PLAYBACK_DEVICE") or os.environ.get("GL
 CHUNK_SIZE = 3200  # 100 ms @ 16 kHz, int16
 TTS_CHUNK_BYTES = int(24000 * 0.2 * 2)  # 200 ms @ 24 kHz
 MAX_PEAK = 20000  # ~-4 dBFS peak limit (Piper outputs full-scale)
+# Speaker volume: hub-controlled 0-100 (frame 0x16). 100 = full (the
+# MAX_PEAK limit above still applies); 0 = digital silence.
+DEFAULT_VOLUME = 100
+
+
+def apply_volume(arr: np.ndarray, level: int) -> np.ndarray:
+    """Scale int16 PCM by a 0-100 volume level, clamped to int16 range.
+
+    Pure (testable); level >= 100 returns the input unchanged.
+    """
+    if level >= 100:
+        return arr
+    gain = max(0, level) / 100.0
+    if gain == 0.0:
+        return np.zeros_like(arr)
+    return np.clip(arr.astype(np.float32) * gain, -32768, 32767).astype(np.int16)
 # Aplay is kept alive and warm (short silences while idle) so the ALSA/USB
 # device never closes: re-opening it per reply is what causes the speaker
 # pop and the swallowed first second on this card.
@@ -50,6 +67,15 @@ class Playback:
         self._write_lock = None  # created lazily: asyncio.Lock binds to the loop
         self._last_tts = 0.0  # monotonic time of last TTS data written
         self._burst_active = False
+        self.volume = DEFAULT_VOLUME  # 0-100, hub-controlled (frame 0x16)
+
+    def set_volume(self, level: int) -> None:
+        """Hub 0x16 frame: set the playback gain (clamped to 0-100)."""
+        level = max(0, min(100, int(level)))
+        if level == self.volume:
+            return
+        self.volume = level
+        logger.info("[PLAYBACK] volume set to %d%%", level)
 
     def _lock(self) -> asyncio.Lock:
         if self._write_lock is None:
@@ -128,6 +154,8 @@ class Playback:
                 peak = int(np.max(np.abs(arr))) if len(arr) else 0
                 if peak > MAX_PEAK:
                     arr = (arr * (MAX_PEAK / peak)).astype(np.int16)
+                if self.volume < 100:
+                    arr = apply_volume(arr, self.volume)
                 frame = self._fade_in(arr).tobytes()
                 await self._write_frame(frame)
             except Exception as e:
@@ -197,6 +225,10 @@ async def receive_audio(ws, audio_queue: asyncio.Queue):
             continue
         frame_type, payload = data[0], data[1:]
         if frame_type == 0x14:  # hub heartbeat
+            continue
+        if frame_type == 0x16:  # volume (int16 LE, 0-100)
+            if len(payload) >= 2:
+                playback.set_volume(int.from_bytes(payload[:2], "little"))
             continue
         if frame_type in (0x11, 0x12, 0x13):
             audio_queue.put_nowait((frame_type, payload))

@@ -136,5 +136,61 @@ class TestSpokeFadeIn(unittest.TestCase):
         self.assertFalse(pb._burst_active)
 
 
+@unittest.skipUnless(_SPOKE, "spoke module not importable in this environment")
+class TestSpokeVolume(unittest.TestCase):
+    """apply_volume is pure math; set_volume clamps; write() applies the
+    gain after peak-limiting and before the fade-in."""
+
+    def test_full_volume_is_noop(self):
+        arr = np.array([1000, -2000, 20000, -20000], dtype=np.int16)
+        self.assertIs(spoke.apply_volume(arr, 100), arr)
+        self.assertIs(spoke.apply_volume(arr, 150), arr)  # clamps up, no-op
+
+    def test_half_volume_scales(self):
+        arr = np.array([1000, -2000, 20000, -20000], dtype=np.int16)
+        out = spoke.apply_volume(arr, 50)
+        self.assertTrue((out == np.array([500, -1000, 10000, -10000], dtype=np.int16)).all())
+
+    def test_zero_volume_is_silence(self):
+        arr = np.array([1000, -2000], dtype=np.int16)
+        out = spoke.apply_volume(arr, 0)
+        self.assertTrue((out == 0).all())
+        self.assertEqual(out.dtype, np.int16)
+
+    def test_negative_level_clamps_to_silence(self):
+        out = spoke.apply_volume(np.array([1000], dtype=np.int16), -5)
+        self.assertTrue((out == 0).all())
+
+    def test_set_volume_clamps(self):
+        pb = spoke.Playback()
+        pb.set_volume(150)
+        self.assertEqual(pb.volume, 100)
+        pb.set_volume(-5)
+        self.assertEqual(pb.volume, 0)
+        pb.set_volume(42)
+        self.assertEqual(pb.volume, 42)
+        # no-op when unchanged (no log spam)
+        pb.set_volume(42)
+        self.assertEqual(pb.volume, 42)
+
+    def test_write_applies_volume(self):
+        import asyncio
+        pb = spoke.Playback()
+        pb.set_volume(50)
+        captured = []
+
+        async def fake_write(frame):
+            captured.append(frame)
+
+        pb._write_frame = fake_write
+        pb._fade_in = lambda a: a  # isolate the volume math
+        data = np.full(spoke.TTS_CHUNK_BYTES // 2, 20000, dtype=np.int16).tobytes()
+        asyncio.run(pb.write(data))
+        self.assertEqual(len(captured), 1)
+        out = np.frombuffer(captured[0], dtype=np.int16)
+        # peak-limited to MAX_PEAK then halved by 50% volume
+        self.assertTrue((np.abs(out) == spoke.MAX_PEAK // 2).all())
+
+
 if __name__ == "__main__":
     unittest.main()

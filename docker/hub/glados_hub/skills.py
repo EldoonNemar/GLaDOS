@@ -35,6 +35,17 @@ def set_announce_fn(fn) -> None:
     _announce = fn
 
 
+# Injected by the hub at startup:
+#   async (device_id: str, level: int | None, change: int | None,
+#          report: bool) -> str
+_volume_fn = None
+
+
+def set_volume_fn(fn) -> None:
+    global _volume_fn
+    _volume_fn = fn
+
+
 # One hub-wide store; the hub restart (which clears it) is the documented
 # behavior — persistence is a one-line addition to /startup if ever wanted.
 TIMER_STORE = timers.TimerStore()
@@ -204,6 +215,39 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_volume",
+            "description": (
+                "Set or adjust the speaker volume (the speaker the user is "
+                "talking to). 'level' = absolute volume 0-100 ('set the "
+                "volume to 30', 'mute it' -> level=0); 'change' = relative "
+                "step ('turn it down a bit' -> change=-10, 'louder' -> "
+                "change=+10). level wins if both are given. The result "
+                "states the new volume."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "level": {"type": "integer", "minimum": 0, "maximum": 100},
+                    "change": {"type": "integer"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_volume",
+            "description": (
+                "Report the current speaker volume (0-100) for the speaker "
+                "the user is talking to. Use it when asked what the volume "
+                "is."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
 ]
 
 
@@ -256,6 +300,24 @@ async def execute_tool(name: str, args: dict, speaker: str) -> str:
             )
         if name == "check_camera":
             return cameras.check_camera(str(args.get("camera") or "front"))
+        if name in ("set_volume", "get_volume"):
+            if _volume_fn is None:
+                return "volume control unavailable (hub not started)"
+            level = args.get("level")
+            change = args.get("change")
+            try:
+                level = int(level) if level is not None else None
+                change = int(change) if change is not None else None
+            except (TypeError, ValueError):
+                return "level and change must be integers"
+            if name == "get_volume" or (level is None and change is None):
+                report = True
+                level = change = None
+            else:
+                report = False
+            return await asyncio.wait_for(
+                _volume_fn(speaker, level, change, report), TOOL_TIMEOUT_S
+            )
         return f"unknown tool '{name}'"
     except asyncio.TimeoutError:
         return f"tool {name} timed out"
@@ -277,6 +339,13 @@ def describe_capabilities() -> str:
         "Announcements: the announce tool sends a spoken message to the OTHER "
         "GLaDOS speakers in the house (e.g. dinner is ready). The asking speaker "
         "hears your normal reply, so do not duplicate it."
+    )
+    blocks.append(
+        "Speaker volume: set_volume and get_volume control the volume of the "
+        "speaker the user is talking to. For relative requests ('turn it down "
+        "a bit', 'louder', 'too loud') use change with a modest step (-10 or "
+        "+10); for absolute ones ('set it to 30', 'mute it') use level "
+        "(0 = mute). Confirm the new volume from the tool result."
     )
     cam = cameras.describe_capabilities()
     if cam:

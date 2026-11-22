@@ -120,6 +120,53 @@ last_location = DEFAULT_LOCATION
 # One shared streaming-ASR engine for the whole hub (Vosk model loaded once)
 asr_engine = ASREngine()
 
+# ── Speaker volume ─────────────────────────────────────────────────
+# Per-device playback volume (0-100). 100 = current behavior (the spoke
+# still peak-limits TTS to ~-4 dBFS). The hub is the source of truth: the
+# LLM sets it via tools, the hub pushes frame 0x16 to the spoke on change
+# and re-sends it on every (re)connect, and the spoke holds the level
+# in between.
+DEFAULT_VOLUME = 100
+VOLUME: dict[str, int] = {}
+
+
+def get_volume(device_id: str) -> int:
+    return VOLUME.get(device_id, DEFAULT_VOLUME)
+
+
+def apply_volume(device_id: str, level=None, change=None) -> int:
+    """Set (level, absolute 0-100) or adjust (change, relative) the volume.
+
+    Clamps to [0, 100]; level wins when both are given.
+    """
+    if level is None and change is None:
+        raise ValueError("provide 'level' (0-100) or 'change' (relative)")
+    current = get_volume(device_id)
+    new = int(level) if level is not None else current + int(change)
+    VOLUME[device_id] = max(0, min(100, new))
+    return VOLUME[device_id]
+
+
+async def _send_volume(ws: WebSocket, level: int) -> None:
+    """Frame 0x16 + int16 LE volume for the spoke's playback gain."""
+    try:
+        await ws.send_bytes(bytes([0x16]) + int(level).to_bytes(2, "little"))
+    except Exception:
+        pass
+
+
+async def _volume_tool(device_id: str, level=None, change=None, report: bool = False) -> str:
+    """set_volume / get_volume tool body."""
+    if report or (level is None and change is None):
+        return f"current volume is {get_volume(device_id)}%"
+    new = apply_volume(device_id, level=level, change=change)
+    s = active_sessions.get(device_id)
+    if s is not None and s.ws is not None:
+        await _send_volume(s.ws, new)
+    if new == 0:
+        return "volume muted (0%)"
+    return f"volume set to {new}%"
+
 
 @app.on_event("startup")
 async def _startup():
@@ -127,6 +174,7 @@ async def _startup():
     # Wire the tool layer into the hub's speak paths (kept out of import
     # time so skills/timers stay importable without a running hub).
     skills.set_announce_fn(_announce_to_devices)
+    skills.set_volume_fn(_volume_tool)
     timers.set_speak_fn(_speak_to_one_device)
     # Camera feed: announces to ALL active speakers (speaker="" -> no one
     # skipped) — a security event is for the whole house.
@@ -630,6 +678,9 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
     session.ws = websocket
     active_sessions[device_id] = session
     logger.info("Client connected: %s (ASR stream: %s)", device_id, "ok" if session.asr else "UNAVAILABLE")
+    # Re-sync the playback volume: the spoke holds its gain across hub
+    # restarts, but a spoke reboot loses it — tell it the hub's level.
+    await _send_volume(websocket, get_volume(device_id))
     heartbeat_task = asyncio.create_task(_send_heartbeats(websocket))
     try:
         while True:
