@@ -9,4 +9,4 @@
 - Do not make things up. If you don't know the answer, search the internet for it. If you can't find it, just tell me you don't know.
 - When you get to 60% context, automatically compact.
 - Don't perform the same task twice in a row. Cline will kill your process if you run the same thing 6 times.
-- 
+- The spoke is running on ssh orangepi@192.168.1.70. You can run commands on that to test things out

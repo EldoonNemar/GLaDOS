@@ -27,3 +27,10 @@ Thumbs.db
 # Local config
 spokes/esp32-spoke/sdkconfig
 spokes/esp32-spoke/sdkconfig.old
+spokes/esp32-spoke/sdkconfig.orig
+spokes/esp32-spoke/sdkconfig.esp32*
+spokes/arduino-esp32/GLaDOS_Spoke/sdkconfig*
+spokes/arduino-esp32/*.tar.gz
+
+# PlatformIO build artifacts
+spokes/esp32-spoke/.pio/

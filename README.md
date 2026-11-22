@@ -4,19 +4,24 @@ A sarcastic, deadpan AI assistant based on the Portal character GLaDOS.
 
 ## Setup
 
-### 1. Download the LLM model (~5 GB)
+### 1. Configure the local LLM
+
+The hub's local LLM is qwen3.8-27b served by the radiance engine
+(`/opt/jigowatts`, host port 8000). Put radiance's API key in `.env`:
 
 ```bash
-./models/download-gemma4.sh
+LLM_API_KEY=<RADIANCE_API_KEY from /opt/jigowatts/.env>
 ```
 
-Requires: `pip install huggingface_hub`
+(Old path: Gemma 4 E4B via llama.cpp with `./models/download-gemma4.sh` —
+retired; the `glados_llama` service stays commented out in docker-compose.yml
+for a one-step rollback.)
 
 ### 2. Start the backend
 
 ```bash
-# Backend only (LLM + ASR/TTS + WebSocket hub)
-docker compose up -d glados_llama glados_engine glados_hub
+# Backend only (ASR/TTS + WebSocket hub; local LLM = radiance on the host)
+docker compose up -d glados_engine glados_hub
 
 # Check health
 curl http://localhost:5050/health
@@ -32,9 +37,9 @@ docker compose --profile spoke up -d glados_spoke
 │         ROCm GPU Server              │
 │                                      │
 │  ┌─────────────┐  ┌────────────────┐ │
-│  │ glados_llama│  │  glados_engine │ │
-│  │ (llama.cpp) │  │ (ASR/TTS)      │ │
-│  │  Port 8080  │  │  Port 8081     │ │
+│  │  radiance   │  │  glados_engine │ │
+│  │(qwen3.8-27B)│  │ (ASR/TTS)      │ │
+│  │  Port 8000  │  │  Port 8081     │ │
 │  └─────────────┘  └────────┬───────┘ │
 │                            │         │
 │  ┌─────────────────────────▼──────┐  │
@@ -54,11 +59,10 @@ docker compose --profile spoke up -d glados_spoke
 ## Quick Start
 
 ```bash
-# 1. Download the LLM model
-./models/download-gemma4.sh
+# 1. Put radiance's API key in .env (LLM_API_KEY=...)
 
-# 2. Start the backend (LLM + ASR/TTS + WebSocket hub)
-docker compose up -d glados_llama glados_engine glados_hub
+# 2. Start the backend (ASR/TTS + WebSocket hub; local LLM = radiance on host)
+docker compose up -d glados_engine glados_hub
 
 # 3. Check health
 curl http://localhost:5050/health
@@ -69,7 +73,7 @@ docker compose --profile spoke up -d glados_spoke
 
 ## Components
 
-- **glados_llama** — Gemma 4 E4B LLM via llama.cpp (ROCm)
+- **Local LLM** — qwen3.8-27b via the radiance engine (host port 8000; the old glados_llama / Gemma 4 E4B service is retired)
 - **glados_engine** — ASR (Parakeet-tdt) + TTS (Piper/Kokoro)
 - **glados_hub** — WebSocket orchestrator + GLaDOS personality
 - **Python Spoke** — Frontend for laptop/RPi/Orange Pi
