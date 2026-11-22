@@ -283,89 +283,142 @@ class LafvinHat:
 # ── gpiod chardev GPIO ────────────────────────────────────────────────
 #
 # /sys/class/gpio is gone (removed from upstream Linux in 6.13; dead on
-# the RPi 6.1x kernel). gpiod and RPi.GPIO both talk to the chardev uAPI
-# on /dev/gpiochip<N> instead — we do the same with raw ioctls: no gpiod
-# build dependency, no RPi.GPIO Pi-ness check, and a --privileged
-# container sees the host's /dev/gpiochip0.
+# the RPi 6.1x kernel). gpiod talks to the chardev uAPI on
+# /dev/gpiochip<N> — we do the same with raw ioctls: no gpiod build
+# dependency, no RPi.GPIO Pi-ness check, and a --privileged container
+# sees the host's /dev/gpiochip0.
+#
+# ABI v2 — the one the kernel 6.x gpiochar driver actually implements
+# (verified byte-for-byte against /usr/include/linux/gpio.h on the
+# target RPi, and against working `gpioinfo`/`gpioget` under strace):
+#   _IOC(dir, type, nr, size) = dir<<30 | size<<16 | type<<8 | nr
+#   GPIO_GET_CHIP_INFO      _IOR (0xB4, 0x01, struct gpiochip_info)
+#   GPIO_V2_GET_LINE        _IOWR(0xB4, 0x07, struct gpio_v2_line_request)
+#   GPIO_V2_LINE_GET_VALUES _IOWR(0xB4, 0x0E, struct gpio_v2_line_values)
+#   GPIO_V2_LINE_SET_VALUES _IOWR(0xB4, 0x0F, struct gpio_v2_line_values)
+# GET_LINE fills the NEW LINE FD into req.fd (the ioctl returns 0); the
+# values ioctls then run on that line fd with a 64-bit bits/mask bitmap
+# (bit 0 = the requested line).
 
-# struct gpio_line_set from uapi/linux/gpio.h (legacy ABI, still supported)
-class _GpioLineSet(ctypes.Structure):
+GPIO_GET_CHIP_INFO = 0x8044B401      # _IOR(0xB4, 0x01, struct gpiochip_info) [68]
+GPIO_V2_GET_LINE = 0xC250B407        # _IOWR(0xB4, 0x07, gpio_v2_line_request) [592]
+GPIO_V2_LINE_GET_VALUES = 0xC010B40E  # _IOWR(0xB4, 0x0E, gpio_v2_line_values) [16]
+GPIO_V2_LINE_SET_VALUES = 0xC010B40F  # _IOWR(0xB4, 0x0F, gpio_v2_line_values) [16]
+
+FLAG_INPUT = 0x4            # GPIO_V2_LINE_FLAG_INPUT
+FLAG_OUTPUT = 0x8           # GPIO_V2_LINE_FLAG_OUTPUT
+FLAG_BIAS_DISABLED = 0x400  # GPIO_V2_LINE_FLAG_BIAS_DISABLED
+
+
+# struct gpiochip_info from uapi/linux/gpio.h
+class _GpiochipInfo(ctypes.Structure):
     _fields_ = [
-        ("start", ctypes.c_uint32),
-        ("count", ctypes.c_uint32),
-        ("config", ctypes.c_uint32),
-        ("values", ctypes.c_uint32 * 4),
+        ("name", ctypes.c_char * 32),
+        ("label", ctypes.c_char * 32),
+        ("lines", ctypes.c_uint32),
     ]
 
 
-LINEGETSET = 0xC0200130    # _IOWR('1', 0x00, _GpioLineSet) — request line
-LINESETVALS = 0x40200132   # _IOW('1', 0x02, _GpioLineSet) — set values
-LINEGETVALS = 0xC0200133   # _IOWR('1', 0x03, _GpioLineSet) — read values
-LINEUNSET = 0x40200134     # _IOW('1', 0x04, _GpioLineSet) — release line
-FLAG_DIN = 0x1
-FLAG_DOUT = 0x2
-FLAG_BIAS_DISABLE = 0x40
+# struct gpio_v2_line_values from uapi/linux/gpio.h
+class _GpioV2LineValues(ctypes.Structure):
+    _fields_ = [
+        ("bits", ctypes.c_uint64),
+        ("mask", ctypes.c_uint64),
+    ]
+
+
+# struct gpio_v2_line_request from uapi/linux/gpio.h. The config/attrs
+# fields are flattened to raw bytes: we request one line with plain
+# flags and zero attributes, so nothing below `flags` is ever touched.
+class _GpioV2LineRequest(ctypes.Structure):
+    _fields_ = [
+        ("offsets", ctypes.c_uint32 * 64),          # GPIO_V2_LINES_MAX
+        ("consumer", ctypes.c_char * 32),           # GPIO_MAX_NAME_SIZE
+        ("flags", ctypes.c_uint64),                 # gpio_v2_line_config.flags
+        ("num_attrs", ctypes.c_uint32),
+        ("config_pad", ctypes.c_uint32 * 5),
+        ("attrs", ctypes.c_uint8 * 240),            # 10 × 24-byte config_attribute
+        ("num_lines", ctypes.c_uint32),
+        ("event_buffer_size", ctypes.c_uint32),
+        ("padding", ctypes.c_uint32 * 5),
+        ("fd", ctypes.c_int32),
+    ]
 
 
 class _GpiodGpio:
-    """GPIO lines via the gpiod chardev uAPI. `open_fn`/`ioctl_fn` are
-    injectable so tests can run on machines without the HAT (production
-    uses os.open + fcntl.ioctl on /dev/gpiochip0 — Pi 3/4 expose the
-    40-pin header's BCM offsets as /dev/gpiochip0)."""
+    """GPIO lines via the gpiod chardev uAPI (ABI v2). `open_fn`/
+    `ioctl_fn`/`close_fn` are injectable so tests can run on machines
+    without the HAT (production uses os.open + fcntl.ioctl + os.close on
+    /dev/gpiochip0 — the Pi's 40-pin header exposes its BCM offsets as
+    /dev/gpiochip0)."""
 
     def __init__(self, chip_path: str = "/dev/gpiochip0",
-                 open_fn=None, ioctl_fn=None):
+                 open_fn=None, ioctl_fn=None, close_fn=None):
         self._open_fn = open_fn or os.open
         self._ioctl_fn = ioctl_fn or fcntl.ioctl
+        self._close_fn = close_fn or os.close
         self.fd = self._open_fn(chip_path, os.O_RDWR)
-        self._pins: dict[int, "_GpiodLine"] = {}
+        self._lines: dict[int, int] = {}  # pin -> line fd
+        self._num_lines: int | None = None
+        try:
+            info = _GpiochipInfo()
+            self._ioctl_fn(self.fd, GPIO_GET_CHIP_INFO, info)
+            self._num_lines = int(info.lines)
+        except OSError:
+            pass  # non-fatal — request errors carry their own errno
+
+    def _request(self, pin: int, flags: int, label: str) -> int:
+        if self._num_lines is not None and pin >= self._num_lines:
+            raise OSError(f"gpio{pin}: not on this {self._num_lines}-line chip")
+        req = _GpioV2LineRequest()
+        req.offsets[0] = pin
+        req.num_lines = 1
+        req.flags = flags
+        req.consumer = (label or f"glados-gpio{pin}")[:31].encode("ascii", "replace")
+        req.fd = -1
+        self._ioctl_fn(self.fd, GPIO_V2_GET_LINE, req)
+        line_fd = int(req.fd)
+        if line_fd < 0:
+            raise OSError(f"gpio{pin}: line request failed (fd {line_fd})")
+        return line_fd
 
     def output(self, pin: int, label: str = ""):
-        line = self._request(pin, FLAG_DOUT, 0)
-        self._pins[pin] = line
-        return line
+        line = self._request(pin, FLAG_OUTPUT, label)
+        self._lines[pin] = line
+        return _GpiodLine(self, pin)
 
     def input(self, pin: int, label: str = ""):
         # The HAT pulls the button line down on the board; the SoC bias
         # must stay OFF (fighting the two biases makes the idle level
         # indeterminate). HIGH = pressed, LOW = released.
         try:
-            line = self._request(pin, FLAG_DIN | FLAG_BIAS_DISABLE, 0)
+            line = self._request(pin, FLAG_INPUT | FLAG_BIAS_DISABLED, label)
         except OSError:
             # Some gpiod/kernel combinations don't support bias-disable;
             # retry plain (matches the vendor driver's fallback).
-            line = self._request(pin, FLAG_DIN, 0)
-        self._pins[pin] = line
-        return line
-
-    def _request(self, pin: int, flags: int, value: int):
-        buf = _GpioLineSet(pin, 1, flags, (value & 1, 0, 0, 0))
-        try:
-            self._ioctl_fn(self.fd, LINEGETSET, buf)
-        except OSError as e:
-            raise OSError(f"gpio{pin}: line request failed ({e})") from e
+            line = self._request(pin, FLAG_INPUT, label)
+        self._lines[pin] = line
         return _GpiodLine(self, pin)
 
     def set_value(self, pin: int, value: int):
-        # count=1, config is the bit-mask of lines to change (bit 0).
-        buf = _GpioLineSet(pin, 1, 1, (value & 1, 0, 0, 0))
-        self._ioctl_fn(self.fd, LINESETVALS, buf)
+        # Line fd: bit 0 of the bitmap is the (sole) requested line.
+        buf = _GpioV2LineValues(bits=value & 1, mask=1)
+        self._ioctl_fn(self._lines[pin], GPIO_V2_LINE_SET_VALUES, buf)
 
     def get_value(self, pin: int) -> int:
-        buf = _GpioLineSet(pin, 1, 1, (0, 0, 0, 0))
-        self._ioctl_fn(self.fd, LINEGETVALS, buf)
-        return int(buf.values[0]) & 1
+        buf = _GpioV2LineValues(bits=0, mask=1)
+        self._ioctl_fn(self._lines[pin], GPIO_V2_LINE_GET_VALUES, buf)
+        return int(buf.bits) & 1
 
     def cleanup(self):
-        for pin in list(self._pins):
+        for pin in list(self._lines):
             try:
-                buf = _GpioLineSet(pin, 1, 0, (0, 0, 0, 0))
-                self._ioctl_fn(self.fd, LINEUNSET, buf)
-            except OSError:
+                self._close_fn(self._lines[pin])
+            except (OSError, TypeError, ValueError):
                 pass
-            self._pins.pop(pin, None)
+            self._lines.pop(pin, None)
         try:
-            os.close(self.fd)
+            self._close_fn(self.fd)
         except (OSError, TypeError, ValueError):
             pass
 

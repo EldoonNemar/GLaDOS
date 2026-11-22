@@ -8,6 +8,7 @@ Tests for the LAFVIN HAT display on the python spoke:
 Pure logic only; no GPIO/SPI hardware. Spoke main.py is loaded the same way
 test_playback.py does (importlib, so `import main` can't collide).
 """
+import ctypes
 import importlib.util
 import sys
 import threading
@@ -202,39 +203,95 @@ class TestLafvinHatOpen(unittest.TestCase):
 # ── lafvin: gpiod chardev GPIO layer ──────────────────────────────────
 
 class FakeGpioChip:
-    """Simulates /dev/gpiochip0 for the legacy gpiod uAPI ioctls."""
+    """Simulates /dev/gpiochip0 for the gpiod chardev uAPI (ABI v2):
+    GET_LINE hands out a line fd, values ioctls run on that fd with a
+    bits/mask bitmap."""
 
-    def __init__(self):
+    CHIP_FD = 3
+
+    def __init__(self, num_lines: int = 58):
         self.lines: dict[int, dict] = {}
+        self.num_lines = num_lines
+        self._next_fd = 100
+        self.closed: list[int] = []
+
+    def open(self, *a, **k):
+        return self.CHIP_FD
+
+    def close(self, fd):
+        self.closed.append(int(fd))
+        # closing a line fd releases the line (kernel behavior)
+        for pin, st in list(self.lines.items()):
+            if st["fd"] == fd:
+                del self.lines[pin]
+                break
+
+    def _pin_for_fd(self, fd):
+        for pin, st in self.lines.items():
+            if st["fd"] == fd:
+                return pin
+        return None
 
     def ioctl(self, fd, req, buf):
-        pin = buf.start
-        if req == lafvin.LINEGETSET:
+        if req == lafvin.GPIO_GET_CHIP_INFO:
+            buf.name = b"gpiochip0"
+            buf.label = b"fake"
+            buf.lines = self.num_lines
+            return 0
+        if req == lafvin.GPIO_V2_GET_LINE:
+            pin = int(buf.offsets[0])
+            flags = int(buf.flags)
+            if pin >= self.num_lines:
+                raise OSError("invalid line offset")
             if pin in self.lines:
                 raise OSError("line busy")
-            out = bool(buf.config & lafvin.FLAG_DOUT)
+            self._next_fd += 1
             self.lines[pin] = {
-                "out": out,
-                "bias_disabled": bool(buf.config & lafvin.FLAG_BIAS_DISABLE),
-                "value": int(buf.values[0]) & 1 if out else 0,
+                "out": bool(flags & lafvin.FLAG_OUTPUT),
+                "bias_disabled": bool(flags & lafvin.FLAG_BIAS_DISABLED),
+                "value": 0,
+                "fd": self._next_fd,
             }
-        elif req == lafvin.LINESETVALS:
-            if pin not in self.lines:
-                raise OSError("line not requested")
-            self.lines[pin]["value"] = int(buf.values[0]) & 1
-        elif req == lafvin.LINEGETVALS:
-            buf.values[0] = self.lines[pin]["value"]
-        elif req == lafvin.LINEUNSET:
-            self.lines.pop(pin, None)
-        else:
-            raise AssertionError(f"unexpected ioctl {req:#x}")
+            buf.fd = self._next_fd
+            return 0
+        pin = self._pin_for_fd(fd)
+        if pin is None or pin not in self.lines:
+            raise OSError("bad line fd")
+        if req == lafvin.GPIO_V2_LINE_SET_VALUES:
+            self.lines[pin]["value"] = int(buf.bits) & (int(buf.mask) or 1)
+            return 0
+        if req == lafvin.GPIO_V2_LINE_GET_VALUES:
+            buf.bits = self.lines[pin]["value"] & int(buf.mask)
+            return 0
+        raise AssertionError(f"unexpected ioctl {req:#x}")
+
+
+class TestGpioAbi(unittest.TestCase):
+    def test_struct_sizes_match_kernel_abi(self):
+        # sizeof per /usr/include/linux/gpio.h on the target RPi kernel:
+        #   request = 64*4 + 32 + 8 + 4 + 20 + 240 + 4 + 4 + 20 + 4 = 592
+        self.assertEqual(ctypes.sizeof(lafvin._GpioV2LineRequest), 592)
+        self.assertEqual(ctypes.sizeof(lafvin._GpioV2LineValues), 16)
+        self.assertEqual(ctypes.sizeof(lafvin._GpiochipInfo), 68)
+
+    def test_ioctl_words_match_kernel_abi(self):
+        # _IOC(dir, type, nr, size) = dir<<30 | size<<16 | type<<8 | nr
+        self.assertEqual(lafvin.GPIO_GET_CHIP_INFO,
+                         (2 << 30) | (68 << 16) | (0xB4 << 8) | 0x01)
+        self.assertEqual(lafvin.GPIO_V2_GET_LINE,
+                         (3 << 30) | (592 << 16) | (0xB4 << 8) | 0x07)
+        self.assertEqual(lafvin.GPIO_V2_LINE_GET_VALUES,
+                         (3 << 30) | (16 << 16) | (0xB4 << 8) | 0x0E)
+        self.assertEqual(lafvin.GPIO_V2_LINE_SET_VALUES,
+                         (3 << 30) | (16 << 16) | (0xB4 << 8) | 0x0F)
 
 
 class TestGpiodGpio(unittest.TestCase):
     def setUp(self):
         self.chip = FakeGpioChip()
-        self.g = lafvin._GpiodGpio(open_fn=lambda *a, **k: object(),
-                                   ioctl_fn=self.chip.ioctl)
+        self.g = lafvin._GpiodGpio(open_fn=self.chip.open,
+                                   ioctl_fn=self.chip.ioctl,
+                                   close_fn=self.chip.close)
 
     def test_output_request_and_set_value(self):
         line = self.g.output(lafvin.LCD_DC_PIN, "dc")
@@ -257,15 +314,15 @@ class TestGpiodGpio(unittest.TestCase):
         self.assertEqual(line.read(), 1)
 
     def test_input_falls_back_without_bias_flag(self):
-        # Kernel rejects BIAS_DISABLE (some gpiod/kernel combos) — plain
-        # DIN must still work, like the vendor driver's fallback.
+        # Kernel rejects BIAS_DISABLED (some gpiod/kernel combos) — plain
+        # INPUT must still work, like the vendor driver's fallback.
         def reject_bias(fd, req, buf):
-            if req == lafvin.LINEGETSET and (
-                    buf.config & lafvin.FLAG_BIAS_DISABLE):
+            if req == lafvin.GPIO_V2_GET_LINE and (
+                    int(buf.flags) & lafvin.FLAG_BIAS_DISABLED):
                 raise OSError("unsupported bias")
-            self.chip.ioctl(fd, req, buf)
-        g = lafvin._GpiodGpio(open_fn=lambda *a, **k: object(),
-                              ioctl_fn=reject_bias)
+            return self.chip.ioctl(fd, req, buf)
+        g = lafvin._GpiodGpio(open_fn=self.chip.open, ioctl_fn=reject_bias,
+                              close_fn=self.chip.close)
         line = g.input(lafvin.BUTTON_PIN, "button")
         st = self.chip.lines[lafvin.BUTTON_PIN]
         self.assertFalse(st["bias_disabled"])
@@ -275,16 +332,24 @@ class TestGpiodGpio(unittest.TestCase):
         def boom(fd, req, buf):
             raise OSError("ENODEV: no gpiochip")
         with self.assertRaises(OSError):
-            lafvin._GpiodGpio(open_fn=lambda *a, **k: object(),
-                              ioctl_fn=boom).output(lafvin.BUTTON_PIN)
+            lafvin._GpiodGpio(open_fn=self.chip.open, ioctl_fn=boom,
+                              close_fn=self.chip.close).output(lafvin.BUTTON_PIN)
 
-    def test_cleanup_releases_lines(self):
+    def test_off_chip_pin_rejected(self):
+        with self.assertRaises(OSError):
+            self.g.output(lafvin.BUTTON_PIN + self.chip.num_lines, "way out")
+
+    def test_cleanup_closes_line_fds_and_chip(self):
         self.g.output(lafvin.BACKLIGHT_PIN, "bl")
         self.g.output(lafvin.LCD_DC_PIN, "dc")
         self.g.input(lafvin.BUTTON_PIN, "button")
+        fds = [st["fd"] for st in self.chip.lines.values()]
         self.g.cleanup()
         self.assertEqual(self.chip.lines, {})
-        self.assertEqual(self.g._pins, {})
+        self.assertEqual(self.g._lines, {})
+        for fd in fds:
+            self.assertIn(fd, self.chip.closed)
+        self.assertIn(FakeGpioChip.CHIP_FD, self.chip.closed)
 
 
 # ── face: rendering ──────────────────────────────────────────────────
