@@ -23,7 +23,8 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "spokes" / "python-spoke"))
 
 import lafvin  # noqa: E402
-from face import Face, IDLE, LISTENING, TALKING, to_rgb565  # noqa: E402
+from face import (Face, IDLE, LISTENING, THINKING, TALKING, EYE_RADIUS,  # noqa: E402
+                  to_rgb565)
 from lafvin import (HEIGHT, ROW_OFFSET, WIDTH, INIT_SEQUENCE,  # noqa: E402
                     LafvinHat, RgbLed, St7789, rgb565)
 
@@ -484,8 +485,8 @@ class TestFaceStates(unittest.TestCase):
         self.assertEqual(f.state, IDLE)
 
     def test_equalizer_ring_only_while_talking(self):
-        # listening pulses the eye but draws no ring; the segmented
-        # equalizer ring is a talking-only effect
+        # the screen is calm while listening (steady eye, no ring);
+        # the segmented equalizer ring is a talking-only effect
         def zone_max(frame: bytes) -> int:
             words = np.frombuffer(frame, dtype=">u2").reshape(
                 HEIGHT, WIDTH).astype(np.uint32)
@@ -509,6 +510,41 @@ class TestFaceStates(unittest.TestCase):
             g.tick(0.1, 0.0, 0.9)  # sustained talking
         self.assertEqual(g.state, TALKING)
         self.assertGreater(zone_max(g.tick(0.1, 0.0, 0.9)), 0x4000)  # ring
+
+    def test_noise_does_not_grow_the_eye(self):
+        # The screen is deliberately calm about ambient noise: sustained
+        # mic activity (listening) must render the same steady breathing
+        # eye as idle — no mic-driven swelling.
+        def center_row_extent(frame: bytes) -> float:
+            words = np.frombuffer(frame, dtype=">u2").reshape(HEIGHT, WIDTH)
+            row = words[HEIGHT // 2, :].astype(np.int32)
+            bright = np.flatnonzero(row > 0x4000)  # yellow eye, not bg
+            return float(bright.max() - bright.min()) if len(bright) else 0.0
+
+        f = Face(seed=1)
+        for _ in range(30):
+            f.tick(0.1, 0.9, 0.0)  # sustained (high) listening
+        self.assertEqual(f.state, LISTENING)
+        ext = center_row_extent(f.tick(0.1, 0.9, 0.0))
+        # breathing eye: diameter 2*r with r = 52*(1.0 +/- 0.05) + 1px AA
+        # The old mic pulse reached ~122 px; cap it back to the idle scale.
+        self.assertLess(ext, 2 * EYE_RADIUS * 1.05 + 2)
+        self.assertGreater(ext, 2 * EYE_RADIUS * 0.95 - 2)
+
+    def test_thinking_draws_no_orbit(self):
+        # The amber dot that used to orbit the eye during THINKING is gone:
+        # the band at radius ~74 (where it orbited) must stay background-dim.
+        g = Face(seed=1)
+        g.tick(0.1, 0.9, 0.0)  # t=0.1  a mic blip -> listening
+        g.tick(0.1, 0.0, 0.0)  # t=0.2
+        for _ in range(5):
+            g.tick(0.1, 0.0, 0.0)  # t=0.3..0.7
+        self.assertEqual(g.state, THINKING)  # past listen, inside think window
+        words = np.frombuffer(g.tick(0.1, 0.0, 0.0),
+                              dtype=">u2").reshape(HEIGHT, WIDTH).astype(np.uint32)
+        yy, xx = np.mgrid[0:HEIGHT, 0:WIDTH]
+        d = np.sqrt((xx - WIDTH / 2) ** 2 + (yy - HEIGHT / 2) ** 2)
+        self.assertLess(int(words[(d > 66) & (d < 84)].max()), 0x4000)
 
 
 # ── main: AudioMeter ─────────────────────────────────────────────────

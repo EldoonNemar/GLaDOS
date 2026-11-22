@@ -2,12 +2,11 @@
 GLaDOS face for the LAFVIN HAT display — pure numpy, no image libraries.
 
 Renders 240x280 frames as RGB565 bytes. A solid yellow "eye" sits at the
-center of the screen and is ALWAYS on, in every state:
-  IDLE      the eye, gently breathing
+center of the screen and is ALWAYS on. The screen is deliberately calm
+about ambient noise — idle, listening, and thinking all render the same
+steady, gently breathing eye; only speech changes it:
   TALKING   the eye pulsing with the TTS amplitude + an audio-reactive
             segmented equalizer ring around it (talking only)
-  LISTENING the eye pulsing with the mic level (no ring)
-  THINKING  the eye, plus an amber dot orbiting a faint circle
 
 Frames render through a decaying trail buffer so state changes blend
 instead of popping.
@@ -41,7 +40,9 @@ STATE_LED = {
     THINKING: (255, 160, 0),
     TALKING: (0, 230, 110),
 }
-STATE_BACKLIGHT = {IDLE: 55, LISTENING: 100, THINKING: 85, TALKING: 100}
+# noise states keep the idle backlight so ambient noise does not make
+# the panel visibly react; only talking lifts it
+STATE_BACKLIGHT = {IDLE: 55, LISTENING: 55, THINKING: 55, TALKING: 100}
 
 
 def to_rgb565(frame: np.ndarray) -> bytes:
@@ -67,7 +68,6 @@ class Face:
     def __init__(self, seed: int | None = None, now_fn=time.monotonic):
         self._rng = np.random.default_rng(seed)
         self._t = 0.0
-        self._ph1 = float(self._rng.uniform(0, 2 * math.pi))
         self._ph3 = float(self._rng.uniform(0, 2 * math.pi))
         self.state = IDLE
         self._last_tts = -1e9
@@ -117,18 +117,6 @@ class Face:
         cover = np.clip(r + 0.5 - d, 0.0, 1.0)
         return YELLOW[None, None, :] * cover[:, :, None]
 
-    def _ball_field(self, cx, cy, r, color, core) -> np.ndarray:
-        d = np.sqrt((self._xx - cx) ** 2 + (self._yy - cy) ** 2)
-        inten = np.power(np.clip(1.0 - d / r, 0.0, 1.0), 1.4)
-        field = color[None, None, :] * inten[:, :, None]
-        cd = d
-        core_i = np.clip(1.0 - cd / (r * 0.45), 0.0, 1.0) * 0.7
-        field += (core - color)[None, None, :] * core_i[:, :, None]
-        hx, hy = cx - r * 0.35, cy - r * 0.4
-        hd = np.sqrt((self._xx - hx) ** 2 + (self._yy - hy) ** 2)
-        field += 0.5 * np.clip(1.0 - hd / (r * 0.30), 0.0, 1.0)[:, :, None]
-        return np.clip(field, 0.0, 1.0)
-
     def _add_trail(self, field: np.ndarray):
         self._trail = np.maximum(self._trail * TRAIL_DECAY, field)
 
@@ -149,35 +137,22 @@ class Face:
              tts_level: float = 0.0) -> bytes:
         self.update(dt, mic_level, tts_level)
         cx0, cy0 = WIDTH / 2, HEIGHT / 2
-        # The eye is always on — solid yellow in every state; only its
-        # size changes (and the equalizer ring, which is talking-only).
-        if self.state == IDLE:
-            r = EYE_RADIUS * (1.0 + 0.05 * math.sin(0.9 * self._t))
-        elif self.state == TALKING:
+        # The eye is always on, and the screen is deliberately calm
+        # about ambient noise: idle / listening / thinking all render
+        # the same steady, gently breathing eye. Only speech changes
+        # it — the talking pulse and the equalizer ring.
+        if self.state == TALKING:
             lvl = self._tts_level
             # pulse kept modest so eye + ring stay inside the panel
             # (half-width is 120 px; ring reaches r + 14 + 37 at most)
             r = EYE_RADIUS * (0.85 + 0.45 * lvl)
-        elif self.state == LISTENING:
-            lvl = self._mic_level
-            r = EYE_RADIUS * (0.9 + 0.5 * lvl)
-        else:  # THINKING
-            r = EYE_RADIUS
+        else:
+            r = EYE_RADIUS * (1.0 + 0.05 * math.sin(0.9 * self._t))
         self._add_trail(self._eye_field(cx0, cy0, r))
         if self.state == TALKING:
             # the equalizer ring is a talking-only effect
             self._trail = np.maximum(
                 self._trail,
                 self._ring_field(cx0, cy0, r + 14.0, max(lvl, 0.15), 28, AMBER))
-        elif self.state == THINKING:
-            # orbit outside the (doubled) eye
-            a = self._t * 2.6 + self._ph1
-            ox = cx0 + 74.0 * math.cos(a)
-            oy = cy0 + 74.0 * math.sin(a)
-            self._add_trail(self._ball_field(ox, oy, 7.0, AMBER, AMBER))
-            d = np.sqrt((self._xx - cx0) ** 2 + (self._yy - cy0) ** 2)
-            guide = np.clip(1.0 - abs(d - 74.0), 0.0, 1.0) * 0.12
-            self._trail = np.maximum(self._trail,
-                                     AMBER[None, None, :] * guide[:, :, None])
         frame = np.clip(self._bg + self._trail, 0.0, 1.0)
         return to_rgb565(frame)
