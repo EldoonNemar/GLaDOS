@@ -390,6 +390,8 @@ $("cams-save").onclick = async () => {
       (d.monitor_running ? "" : " (monitor not running: check MQTT broker env)"));
     await loadCams();
     setTimeout(refreshStatus, 1500);
+  } else msg("cams-msg", "save failed: " + await detail(res), true);
+};
 
 /* ── quiet hours ──────────────────────────────────────────────────── */
 let quietCfg = {timezone: "America/Chicago", windows: []};
