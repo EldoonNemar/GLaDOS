@@ -9,10 +9,7 @@ Pure logic only; no GPIO/SPI hardware. Spoke main.py is loaded the same way
 test_playback.py does (importlib, so `import main` can't collide).
 """
 import importlib.util
-import os
-import shutil
 import sys
-import tempfile
 import threading
 import types
 import unittest
@@ -202,57 +199,92 @@ class TestLafvinHatOpen(unittest.TestCase):
             self.assertIsNone(LafvinHat.try_open())
 
 
-# ── lafvin: sysfs GPIO layer ─────────────────────────────────────────
+# ── lafvin: gpiod chardev GPIO layer ──────────────────────────────────
 
-class TestSysfsGpio(unittest.TestCase):
+class FakeGpioChip:
+    """Simulates /dev/gpiochip0 for the legacy gpiod uAPI ioctls."""
+
+    def __init__(self):
+        self.lines: dict[int, dict] = {}
+
+    def ioctl(self, fd, req, buf):
+        pin = buf.start
+        if req == lafvin.LINEGETSET:
+            if pin in self.lines:
+                raise OSError("line busy")
+            out = bool(buf.config & lafvin.FLAG_DOUT)
+            self.lines[pin] = {
+                "out": out,
+                "bias_disabled": bool(buf.config & lafvin.FLAG_BIAS_DISABLE),
+                "value": int(buf.values[0]) & 1 if out else 0,
+            }
+        elif req == lafvin.LINESETVALS:
+            if pin not in self.lines:
+                raise OSError("line not requested")
+            self.lines[pin]["value"] = int(buf.values[0]) & 1
+        elif req == lafvin.LINEGETVALS:
+            buf.values[0] = self.lines[pin]["value"]
+        elif req == lafvin.LINEUNSET:
+            self.lines.pop(pin, None)
+        else:
+            raise AssertionError(f"unexpected ioctl {req:#x}")
+
+
+class TestGpiodGpio(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
-        for name in ("export", "unexport"):
-            with open(os.path.join(self.tmp, name), "w"):
-                pass
+        self.chip = FakeGpioChip()
+        self.g = lafvin._GpiodGpio(open_fn=lambda *a, **k: object(),
+                                   ioctl_fn=self.chip.ioctl)
 
-    def _mk_pin(self, pin):
-        d = os.path.join(self.tmp, f"gpio{pin}")
-        os.makedirs(d, exist_ok=True)
-        for fname, default in (("direction", "in"), ("value", "0"),
-                               ("pull", "off")):
-            with open(os.path.join(d, fname), "w") as f:
-                f.write(default)
-
-    def _read(self, pin, fname):
-        with open(os.path.join(self.tmp, f"gpio{pin}", fname)) as f:
-            return f.read().strip()
-
-    def test_output_sets_direction_and_value(self):
-        self._mk_pin(27)
-        g = lafvin._SysfsGpio(base=self.tmp)
-        line = g.output(27, "dc")
-        self.assertEqual(self._read(27, "direction"), "out")
+    def test_output_request_and_set_value(self):
+        line = self.g.output(lafvin.LCD_DC_PIN, "dc")
+        st = self.chip.lines[lafvin.LCD_DC_PIN]
+        self.assertTrue(st["out"])
+        self.assertFalse(st["bias_disabled"])
+        self.assertEqual(st["value"], 0)
         line.set_value(1)
-        self.assertEqual(self._read(27, "value"), "1")
+        self.assertEqual(st["value"], 1)
         line.set_value(0)
-        self.assertEqual(self._read(27, "value"), "0")
+        self.assertEqual(st["value"], 0)
 
-    def test_input_disables_bias_and_reads(self):
-        self._mk_pin(17)
-        g = lafvin._SysfsGpio(base=self.tmp)
-        line = g.input(17, "button")
-        self.assertEqual(self._read(17, "direction"), "in")
-        self.assertEqual(self._read(17, "pull"), "off")  # board pulls down
+    def test_input_requests_bias_disabled_and_reads(self):
+        line = self.g.input(lafvin.BUTTON_PIN, "button")
+        st = self.chip.lines[lafvin.BUTTON_PIN]
+        self.assertFalse(st["out"])
+        self.assertTrue(st["bias_disabled"])  # board pulls the button down
         self.assertEqual(line.read(), 0)
-        with open(os.path.join(self.tmp, "gpio17", "value"), "w") as f:
-            f.write("1")
+        st["value"] = 1  # simulate a press
         self.assertEqual(line.read(), 1)
 
-    def test_cleanup_unexports(self):
-        self._mk_pin(22)
-        g = lafvin._SysfsGpio(base=self.tmp)
-        g.output(22, "bl")
-        g.cleanup()
-        with open(os.path.join(self.tmp, "unexport")) as f:
-            self.assertEqual(f.read().strip(), "22")
-        self.assertEqual(g._pins, {})
+    def test_input_falls_back_without_bias_flag(self):
+        # Kernel rejects BIAS_DISABLE (some gpiod/kernel combos) — plain
+        # DIN must still work, like the vendor driver's fallback.
+        def reject_bias(fd, req, buf):
+            if req == lafvin.LINEGETSET and (
+                    buf.config & lafvin.FLAG_BIAS_DISABLE):
+                raise OSError("unsupported bias")
+            self.chip.ioctl(fd, req, buf)
+        g = lafvin._GpiodGpio(open_fn=lambda *a, **k: object(),
+                              ioctl_fn=reject_bias)
+        line = g.input(lafvin.BUTTON_PIN, "button")
+        st = self.chip.lines[lafvin.BUTTON_PIN]
+        self.assertFalse(st["bias_disabled"])
+        self.assertEqual(line.read(), 0)
+
+    def test_request_failure_raises(self):
+        def boom(fd, req, buf):
+            raise OSError("ENODEV: no gpiochip")
+        with self.assertRaises(OSError):
+            lafvin._GpiodGpio(open_fn=lambda *a, **k: object(),
+                              ioctl_fn=boom).output(lafvin.BUTTON_PIN)
+
+    def test_cleanup_releases_lines(self):
+        self.g.output(lafvin.BACKLIGHT_PIN, "bl")
+        self.g.output(lafvin.LCD_DC_PIN, "dc")
+        self.g.input(lafvin.BUTTON_PIN, "button")
+        self.g.cleanup()
+        self.assertEqual(self.chip.lines, {})
+        self.assertEqual(self.g._pins, {})
 
 
 # ── face: rendering ──────────────────────────────────────────────────

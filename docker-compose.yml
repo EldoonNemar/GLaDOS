@@ -119,8 +119,9 @@ services:
   #
   #   docker compose --profile spoke up -d glados_spoke
   #
-  # (--device /dev/spidev0.0 + privileged are only needed for the LAFVIN
-  #  HAT display: SPI panel + GPIO LED/button. Without them the spoke
+  # (--device /dev/spidev0.0 is the LAFVIN HAT's SPI panel; /dev/gpiochip0
+  #  is the gpiod chardev for the HAT's LED/backlight/button GPIOs —
+  #  modern RPi kernels have no /sys/class/gpio. Without these the spoke
   #  still works, the face just auto-disables. /boot/firmware/config.txt
   #  must have dtparam=spi=on.)
   glados_spoke:
@@ -131,10 +132,11 @@ services:
     container_name: glados_spoke
     restart: unless-stopped
     network_mode: host
-    privileged: true  # GPIO sysfs (LAFVIN HAT LED/button); safe: Pi is single-user
+    privileged: true  # expose host /dev (SPI + gpiochip); safe: Pi is single-user
     devices:
       - "/dev/snd:/dev/snd"
       - "/dev/spidev0.0:/dev/spidev0.0"
+      - "/dev/gpiochip0:/dev/gpiochip0"
     environment:
       - GLADOS_HUB_URL=ws://192.168.1.58:5051
       - GLADOS_DEVICE_ID=pi4-spoke-001

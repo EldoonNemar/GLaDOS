@@ -12,11 +12,15 @@ The ST7789 init sequence below is byte-for-byte the sequence LAFVIN ships
 (verified against their St7789Display) — do not "clean it up"; the panel
 timing/gamma values are panel-specific.
 
-spidev is imported lazily and GPIO goes through /sys/class/gpio (no
-RPi.GPIO — its C extension's Pi-ness check breaks inside containers, and
-gpiod adds a build dependency), so this module imports and its classes
-unit-test with fakes on machines without the HAT.
+spidev is imported lazily and GPIO goes through the gpiod chardev uAPI
+(/dev/gpiochip0, raw ioctls — the same path gpiod and RPi.GPIO use; the
+/sys/class/gpio interface was removed from upstream Linux in 6.13 and is
+dead on modern RPi kernels, and a --privileged container sees the host's
+/dev/gpiochip0), so this module imports and its classes unit-test with
+fakes on machines without the HAT.
 """
+import ctypes
+import fcntl
 import logging
 import os
 import threading
@@ -217,7 +221,7 @@ class LafvinHat:
         return hat
 
     def _open(self, spidev):
-        self._gpio = _SysfsGpio()
+        self._gpio = _GpiodGpio()
         self._spi = _Spi(spidev)
         self._spi.open(SPI_BUS, SPI_CS, SPI_SPEED_HZ)
         self.display = St7789(
@@ -276,86 +280,108 @@ class LafvinHat:
             self._gpio.cleanup()
 
 
-class _SysfsGpio:
-    """/sys/class/gpio GPIO — works in a --privileged container with no
-    extra build deps. `base` is overridable so tests point at a fake
-    sysfs tree."""
+# ── gpiod chardev GPIO ────────────────────────────────────────────────
+#
+# /sys/class/gpio is gone (removed from upstream Linux in 6.13; dead on
+# the RPi 6.1x kernel). gpiod and RPi.GPIO both talk to the chardev uAPI
+# on /dev/gpiochip<N> instead — we do the same with raw ioctls: no gpiod
+# build dependency, no RPi.GPIO Pi-ness check, and a --privileged
+# container sees the host's /dev/gpiochip0.
 
-    def __init__(self, base: str = "/sys/class/gpio"):
-        self.base = base
-        self._pins: dict[int, "_SysfsLine"] = {}
+# struct gpio_line_set from uapi/linux/gpio.h (legacy ABI, still supported)
+class _GpioLineSet(ctypes.Structure):
+    _fields_ = [
+        ("start", ctypes.c_uint32),
+        ("count", ctypes.c_uint32),
+        ("config", ctypes.c_uint32),
+        ("values", ctypes.c_uint32 * 4),
+    ]
+
+
+LINEGETSET = 0xC0200130    # _IOWR('1', 0x00, _GpioLineSet) — request line
+LINESETVALS = 0x40200132   # _IOW('1', 0x02, _GpioLineSet) — set values
+LINEGETVALS = 0xC0200133   # _IOWR('1', 0x03, _GpioLineSet) — read values
+LINEUNSET = 0x40200134     # _IOW('1', 0x04, _GpioLineSet) — release line
+FLAG_DIN = 0x1
+FLAG_DOUT = 0x2
+FLAG_BIAS_DISABLE = 0x40
+
+
+class _GpiodGpio:
+    """GPIO lines via the gpiod chardev uAPI. `open_fn`/`ioctl_fn` are
+    injectable so tests can run on machines without the HAT (production
+    uses os.open + fcntl.ioctl on /dev/gpiochip0 — Pi 3/4 expose the
+    40-pin header's BCM offsets as /dev/gpiochip0)."""
+
+    def __init__(self, chip_path: str = "/dev/gpiochip0",
+                 open_fn=None, ioctl_fn=None):
+        self._open_fn = open_fn or os.open
+        self._ioctl_fn = ioctl_fn or fcntl.ioctl
+        self.fd = self._open_fn(chip_path, os.O_RDWR)
+        self._pins: dict[int, "_GpiodLine"] = {}
 
     def output(self, pin: int, label: str = ""):
-        self._export(pin)
-        self._write(f"gpio{pin}/direction", "out")
-        line = _SysfsLine(self, pin)
+        line = self._request(pin, FLAG_DOUT, 0)
         self._pins[pin] = line
         return line
 
     def input(self, pin: int, label: str = ""):
-        self._export(pin)
-        self._write(f"gpio{pin}/direction", "in")
         # The HAT pulls the button line down on the board; the SoC bias
         # must stay OFF (fighting the two biases makes the idle level
         # indeterminate). HIGH = pressed, LOW = released.
         try:
-            self._write(f"gpio{pin}/pull", "off")
+            line = self._request(pin, FLAG_DIN | FLAG_BIAS_DISABLE, 0)
         except OSError:
-            pass
-        line = _SysfsLine(self, pin)
+            # Some gpiod/kernel combinations don't support bias-disable;
+            # retry plain (matches the vendor driver's fallback).
+            line = self._request(pin, FLAG_DIN, 0)
         self._pins[pin] = line
         return line
 
-    def _export(self, pin: int):
-        d = os.path.join(self.base, f"gpio{pin}")
-        if os.path.isdir(d):
-            return  # already exported (possibly by an earlier run)
+    def _request(self, pin: int, flags: int, value: int):
+        buf = _GpioLineSet(pin, 1, flags, (value & 1, 0, 0, 0))
         try:
-            with open(os.path.join(self.base, "export"), "w") as f:
-                f.write(str(pin))
-        except OSError:
-            pass
-        for _ in range(200):
-            if os.path.isdir(d):
-                return
-            time.sleep(0.001)
-        raise OSError(f"gpio{pin}: export did not appear")
+            self._ioctl_fn(self.fd, LINEGETSET, buf)
+        except OSError as e:
+            raise OSError(f"gpio{pin}: line request failed ({e})") from e
+        return _GpiodLine(self, pin)
 
-    def _write(self, relpath: str, value: str):
-        p = os.path.join(self.base, relpath)
-        for _ in range(200):  # sysfs files can lag the export briefly
-            try:
-                with open(p, "w") as f:
-                    f.write(value)
-                return
-            except OSError:
-                time.sleep(0.001)
-        raise OSError(f"gpio write to {relpath} timed out")
+    def set_value(self, pin: int, value: int):
+        # count=1, config is the bit-mask of lines to change (bit 0).
+        buf = _GpioLineSet(pin, 1, 1, (value & 1, 0, 0, 0))
+        self._ioctl_fn(self.fd, LINESETVALS, buf)
+
+    def get_value(self, pin: int) -> int:
+        buf = _GpioLineSet(pin, 1, 1, (0, 0, 0, 0))
+        self._ioctl_fn(self.fd, LINEGETVALS, buf)
+        return int(buf.values[0]) & 1
 
     def cleanup(self):
         for pin in list(self._pins):
             try:
-                with open(os.path.join(self.base, "unexport"), "w") as f:
-                    f.write(str(pin))
+                buf = _GpioLineSet(pin, 1, 0, (0, 0, 0, 0))
+                self._ioctl_fn(self.fd, LINEUNSET, buf)
             except OSError:
                 pass
             self._pins.pop(pin, None)
+        try:
+            os.close(self.fd)
+        except (OSError, TypeError, ValueError):
+            pass
 
 
-class _SysfsLine:
-    def __init__(self, gpio: _SysfsGpio, pin: int):
+class _GpiodLine:
+    def __init__(self, gpio: "_GpiodGpio", pin: int):
         self._gpio = gpio
         self._pin = pin
 
     def set_value(self, value: int):
-        self._gpio._write(f"gpio{self._pin}/value", "1" if value else "0")
+        self._gpio.set_value(self._pin, value)
 
     def read(self) -> int:
         try:
-            with open(os.path.join(self._gpio.base, f"gpio{self._pin}",
-                                   "value")) as f:
-                return int(f.read().strip() or "0")
-        except (OSError, ValueError):
+            return self._gpio.get_value(self._pin)
+        except OSError:
             return 0
 
 
