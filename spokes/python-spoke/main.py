@@ -1,10 +1,16 @@
 """
-GLaDOS Python Spoke - XVF3800 (arecord/aplay) <-> hub WebSocket.
+GLaDOS Python Spoke - audio <-> hub WebSocket, + LAFVIN HAT face.
 
 Pushes 16 kHz mono int16 PCM to the hub in realtime (0x01 frames, 100 ms).
 Plays streamed TTS audio (0x11 frames, 24 kHz int16) as it arrives, with
 low-latency chunked playback. 0x12 = stop playback immediately (barge-in).
 0x16 = set playback volume (int16 LE, 0-100).
+
+When a LAFVIN Audio Display HAT is attached (and GLADOS_DISPLAY != off),
+the conversation state is rendered on its 240x280 ST7789: idle = a yellow
+ball floating around, talking = audio-reactive ball + ring, listening =
+cyan pulse on the mic level, thinking = amber orbit. The HAT's RGB LED and
+backlight mirror the state; its button is a physical barge-in.
 """
 import asyncio
 import logging
@@ -15,11 +21,17 @@ import time
 import numpy as np
 import websockets
 
+from face import Face, STATE_BACKLIGHT, STATE_LED
+from lafvin import LafvinHat
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger("glados_spoke")
 
 HUB_URL = os.environ.get("GLADOS_HUB_URL", "ws://localhost:5051")
 DEVICE_ID = os.environ.get("GLADOS_DEVICE_ID", "spoke-001")
+# LAFVIN HAT display: auto = enable when the HAT is present, off = never.
+DISPLAY_ENABLED = os.environ.get("GLADOS_DISPLAY", "auto").strip().lower()
+DISPLAY_FPS = float(os.environ.get("GLADOS_DISPLAY_FPS", "24"))
 # Device selection (set by setup_audio.py, or directly for manual runs)
 DEFAULT_DEVICE = "plughw:CARD=wm8960soundcard,DEV=0"
 CAPTURE_DEVICE = os.environ.get("GLADOS_CAPTURE_DEVICE") or os.environ.get("GLADOS_AUDIO_DEVICE", DEFAULT_DEVICE)
@@ -43,6 +55,45 @@ def apply_volume(arr: np.ndarray, level: int) -> np.ndarray:
     if gain == 0.0:
         return np.zeros_like(arr)
     return np.clip(arr.astype(np.float32) * gain, -32768, 32767).astype(np.int16)
+
+
+class AudioMeter:
+    """Latest mic/TTS RMS, normalized to 0..1, with a short hold so the
+    face doesn't flicker between the 100 ms capture chunks."""
+
+    MIC_NORM = 6000.0   # speech at ~1 m RMSes a few hundred..2000
+    TTS_NORM = 8000.0   # TTS is peak-limited to 20000; RMS is much lower
+    HOLD_S = 0.25
+
+    def __init__(self, now_fn=time.monotonic):
+        self._now = now_fn
+        self._mic = (0.0, 0.0)
+        self._tts = (0.0, 0.0)
+
+    def set_mic(self, rms: float):
+        self._mic = (float(rms), self._now())
+
+    def set_tts(self, rms: float):
+        self._tts = (float(rms), self._now())
+
+    @staticmethod
+    def _norm(rms: float, norm: float) -> float:
+        return min(1.0, rms / norm)
+
+    def mic_level(self) -> float:
+        rms, t = self._mic
+        if self._now() - t > self.HOLD_S:
+            return 0.0
+        return self._norm(rms, self.MIC_NORM)
+
+    def tts_level(self) -> float:
+        rms, t = self._tts
+        if self._now() - t > self.HOLD_S:
+            return 0.0
+        return self._norm(rms, self.TTS_NORM)
+
+
+meter = AudioMeter()
 # Aplay is kept alive and warm (short silences while idle) so the ALSA/USB
 # device never closes: re-opening it per reply is what causes the speaker
 # pop and the swallowed first second on this card.
@@ -157,6 +208,8 @@ class Playback:
                 if self.volume < 100:
                     arr = apply_volume(arr, self.volume)
                 frame = self._fade_in(arr).tobytes()
+                if len(arr):
+                    meter.set_tts(float(np.sqrt(np.mean(arr.astype(np.float64) ** 2))))
                 await self._write_frame(frame)
             except Exception as e:
                 logger.warning("[PLAYBACK] dropped frame after retries: %s", e)
@@ -253,8 +306,10 @@ async def capture_audio(audio_tx_queue: queue.Queue):
                 chunk = bytes(buf[:CHUNK_SIZE])
                 del buf[:CHUNK_SIZE]
                 chunk_count += 1
+                arr = np.frombuffer(chunk, dtype=np.int16)
+                rms = float(np.sqrt(np.mean(arr.astype(np.float64) ** 2)))
+                meter.set_mic(rms)
                 if chunk_count % 20 == 0:
-                    rms = np.sqrt(np.mean(np.frombuffer(chunk, dtype=np.int16).astype(np.float64)**2))
                     logger.info("[LISTENING] %.2f RMS (chunk %d)", rms, chunk_count)
                 try:
                     audio_tx_queue.put_nowait(bytes([0x01]) + chunk)
@@ -272,9 +327,67 @@ async def send_audio(ws, audio_tx_queue: queue.Queue):
         await ws.send(frame)
 
 
+_ws_loop = None  # set in main(); lets the HAT button (worker thread) barge in
+
+
+def open_hat():
+    """Open the LAFVIN HAT (blocking). Returns None when absent/disabled."""
+    if DISPLAY_ENABLED == "off":
+        return None
+    if DISPLAY_ENABLED != "auto":
+        logger.warning("[DISPLAY] GLADOS_DISPLAY=%r is not 'auto' — treating as auto",
+                       DISPLAY_ENABLED)
+
+    def on_press():
+        logger.info("[DISPLAY] button pressed — barge-in (stopping playback)")
+        if _ws_loop is not None and _ws_loop.is_running():
+            asyncio.run_coroutine_threadsafe(playback.stop(), _ws_loop)
+
+    return LafvinHat.try_open(on_press=on_press)
+
+
+async def display_task(stop_event: asyncio.Event):
+    """Render the conversation face on the LAFVIN HAT.
+
+    Non-critical: exits quietly when the HAT isn't present. Runs the SPI
+    pushes in the executor so the event loop (audio/WS) stays realtime.
+    """
+    loop = asyncio.get_event_loop()
+    hat = await loop.run_in_executor(None, open_hat)
+    if hat is None:
+        logger.info("[DISPLAY] LAFVIN HAT not active — display disabled")
+        return
+    face = Face()
+    last_state = None
+    dt = 1.0 / DISPLAY_FPS
+    try:
+        while not stop_event.is_set():
+            t0 = time.monotonic()
+            frame = face.tick(dt, meter.mic_level(), meter.tts_level())
+            await loop.run_in_executor(None, hat.present_frame, frame)
+            if face.state != last_state:
+                r, g, b = STATE_LED[face.state]
+                await loop.run_in_executor(None, hat.set_led, r, g, b)
+                await loop.run_in_executor(
+                    None, hat.set_backlight, STATE_BACKLIGHT[face.state])
+                logger.info("[DISPLAY] state -> %s", face.state)
+                last_state = face.state
+            await asyncio.sleep(max(0.0, dt - (time.monotonic() - t0)))
+    finally:
+        await loop.run_in_executor(None, hat.close)
+        logger.info("[DISPLAY] stopped")
+
+
 async def main():
+    global _ws_loop
+    _ws_loop = asyncio.get_event_loop()
     logger.info("GLaDOS Spoke starting... Hub=%s Device=%s", HUB_URL, DEVICE_ID)
     retry = 1
+    # The face lives outside the reconnect loop: the HAT opens once and
+    # survives hub drops. On shutdown asyncio.run cancels this task and
+    # display_task's finally closes the HAT.
+    stop_event = asyncio.Event()
+    asyncio.create_task(display_task(stop_event))
     while True:
         tasks = []
         audio_queue = asyncio.Queue()

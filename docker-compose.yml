@@ -118,9 +118,17 @@ services:
   # Example deployment on the audio device:
   #   docker run -d --name glados_spoke --network host \
   #     --device /dev/snd:/dev/snd \
+  #     --device /dev/spidev0.0 \
+  #     --privileged \
   #     -e GLADOS_HUB_URL=ws://192.168.1.58:5051 \
   #     -e GLADOS_DEVICE_ID=spoke-001 \
+  #     -e GLADOS_DISPLAY=auto \
   #     glados-glados_spoke:latest
+  #
+  # (--device /dev/spidev0.0 + --privileged are only needed for the LAFVIN
+  #  HAT display: SPI panel + GPIO LED/button. Without them the spoke still
+  #  works, the face just auto-disables. /boot/firmware/config.txt must have
+  #  dtparam=spi=on.)
   #
   # glados_spoke is disabled here to avoid conflicts.
   # To re-enable, uncomment below and run: docker compose --profile spoke up -d
@@ -133,12 +141,14 @@ services:
   #   container_name: glados_spoke
   #   restart: unless-stopped
   #   network_mode: host
+  #   privileged: true  # GPIO sysfs (LAFVIN HAT LED/button); safe: Pi is single-user
   #   devices:
   #     - "/dev/snd:/dev/snd"
+  #     - "/dev/spidev0.0:/dev/spidev0.0"
   #   environment:
-  #     - GLADOS_HUB_URL=ws://glados_hub:5051
+  #     - GLADOS_HUB_URL=ws://192.168.1.58:5051
   #     - GLADOS_DEVICE_ID=python-spoke-001
-  #     - GLADOS_AUDIO_DEVICE=whisplay
+  #     - GLADOS_DISPLAY=auto
 
 networks:
   glados:
