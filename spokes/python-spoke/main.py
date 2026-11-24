@@ -32,10 +32,29 @@ DEVICE_ID = os.environ.get("GLADOS_DEVICE_ID", "spoke-001")
 # LAFVIN HAT display: auto = enable when the HAT is present, off = never.
 DISPLAY_ENABLED = os.environ.get("GLADOS_DISPLAY", "auto").strip().lower()
 DISPLAY_FPS = float(os.environ.get("GLADOS_DISPLAY_FPS", "24"))
-# Device selection (set by setup_audio.py, or directly for manual runs)
+# Device selection (set by setup_audio.py, or directly for manual runs).
+# A value of 'none' (set by setup_audio.py in GLADOS_AUDIO_DEVICE=none mode)
+# disables that direction entirely: no arecord, no aplay, display only.
 DEFAULT_DEVICE = "plughw:CARD=wm8960soundcard,DEV=0"
-CAPTURE_DEVICE = os.environ.get("GLADOS_CAPTURE_DEVICE") or os.environ.get("GLADOS_AUDIO_DEVICE", DEFAULT_DEVICE)
-PLAYBACK_DEVICE = os.environ.get("GLADOS_PLAYBACK_DEVICE") or os.environ.get("GLADOS_AUDIO_DEVICE", DEFAULT_DEVICE)
+
+
+def _resolve_audio_devices():
+    """Resolve the capture/playback ALSA devices and their disabled flags."""
+    capture = (os.environ.get("GLADOS_CAPTURE_DEVICE")
+               or os.environ.get("GLADOS_AUDIO_DEVICE", DEFAULT_DEVICE))
+    playback = (os.environ.get("GLADOS_PLAYBACK_DEVICE")
+                or os.environ.get("GLADOS_AUDIO_DEVICE", DEFAULT_DEVICE))
+    return (
+        capture,
+        playback,
+        capture.strip().lower() == "none",
+        playback.strip().lower() == "none",
+    )
+
+
+CAPTURE_DEVICE, PLAYBACK_DEVICE, CAPTURE_DISABLED, PLAYBACK_DISABLED = (
+    _resolve_audio_devices()
+)
 CHUNK_SIZE = 3200  # 100 ms @ 16 kHz, int16
 TTS_CHUNK_BYTES = int(24000 * 0.2 * 2)  # 200 ms @ 24 kHz
 MAX_PEAK = 20000  # ~-4 dBFS peak limit (Piper outputs full-scale)
@@ -196,6 +215,8 @@ class Playback:
         Piper outputs hot (full-scale peaks), so we peak-limit to ~-4 dBFS
         to keep the amp from clipping/distorting.
         """
+        if PLAYBACK_DISABLED:
+            return
         self.buffer.extend(data)
         while len(self.buffer) >= TTS_CHUNK_BYTES:
             frame = bytes(self.buffer[:TTS_CHUNK_BYTES])
@@ -383,6 +404,10 @@ async def main():
     _ws_loop = asyncio.get_event_loop()
     logger.info("GLaDOS Spoke starting... Hub=%s Device=%s", HUB_URL, DEVICE_ID)
     retry = 1
+    if CAPTURE_DISABLED:
+        logger.info("[CAPTURE] disabled (GLADOS_CAPTURE_DEVICE=none)")
+    if PLAYBACK_DISABLED:
+        logger.info("[PLAYBACK] disabled (GLADOS_PLAYBACK_DEVICE=none)")
     # The face lives outside the reconnect loop: the HAT opens once and
     # survives hub drops. On shutdown asyncio.run cancels this task and
     # display_task's finally closes the HAT.
@@ -402,12 +427,14 @@ async def main():
                 logger.info("Connected!")
                 retry = 1
                 play_task = asyncio.create_task(play_audio(audio_queue))
-                keep_task = asyncio.create_task(playback.keepalive())
-                cap = asyncio.create_task(capture_audio(audio_tx_queue))
-                snd = asyncio.create_task(send_audio(ws, audio_tx_queue))
                 rcv = asyncio.create_task(receive_audio(ws, audio_queue))
-                tasks = [play_task, keep_task, cap, snd, rcv]
-                asyncio.create_task(playback.start())  # pre-warm aplay/ALSA now
+                tasks = [play_task, rcv]
+                if not PLAYBACK_DISABLED:
+                    tasks.append(asyncio.create_task(playback.keepalive()))
+                    asyncio.create_task(playback.start())  # pre-warm aplay/ALSA now
+                if not CAPTURE_DISABLED:
+                    tasks.append(asyncio.create_task(capture_audio(audio_tx_queue)))
+                    tasks.append(asyncio.create_task(send_audio(ws, audio_tx_queue)))
                 await ws.send(bytes([0x03]))  # session start
                 logger.info("Listening...")
                 while True:

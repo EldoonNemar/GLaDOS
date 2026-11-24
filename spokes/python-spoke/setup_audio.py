@@ -4,6 +4,8 @@ configure ALSA, and start the spoke.
 
 Hardware selection:
   GLADOS_AUDIO_DEVICE=xvf3800|whisplay  -> force a specific board
+  GLADOS_AUDIO_DEVICE=none               -> no audio (display-only bring-up
+                                             for SBCs without a codec HAT)
   (unset)                                -> auto-detect, XVF3800 wins
 """
 
@@ -76,10 +78,14 @@ def find_whisplay_hat():
 def select_hardware():
     """Pick (hw_type, card) via env override or auto-detection.
 
+    GLADOS_AUDIO_DEVICE=none disables audio entirely (card is None) so the
+    spoke can run display-only on SBCs that carry no audio codec HAT.
     Auto-detect order: XVF3800 first, then Whisplay. (None, None) if
     nothing suitable is present.
     """
     forced = os.environ.get('GLADOS_AUDIO_DEVICE', '').strip().lower()
+    if forced == 'none':
+        return ('none', None)
     if forced in ('xvf3800', 'whisplay'):
         card = find_xvf3800() if forced == 'xvf3800' else find_whisplay_hat()
         return (forced, card)
@@ -125,16 +131,28 @@ def set_mic_gain():
 
 
 def start_spoke(hw, card):
-    """Export the audio device env vars and exec the spoke."""
+    """Export the audio device env vars and exec the spoke.
+
+    card=None is GLADOS_AUDIO_DEVICE=none mode: both directions are
+    disabled ('none') and the spoke runs without audio (display only).
+    """
     os.environ['GLADOS_HW_TYPE'] = hw
-    os.environ['GLADOS_CAPTURE_DEVICE'] = f'plughw:{card},0'
-    os.environ['GLADOS_PLAYBACK_DEVICE'] = f'plughw:{card},0'
+    if card is None:
+        os.environ['GLADOS_CAPTURE_DEVICE'] = 'none'
+        os.environ['GLADOS_PLAYBACK_DEVICE'] = 'none'
+    else:
+        os.environ['GLADOS_CAPTURE_DEVICE'] = f'plughw:{card},0'
+        os.environ['GLADOS_PLAYBACK_DEVICE'] = f'plughw:{card},0'
     os.execvp('python', ['python', '/app/main.py'])
 
 
 def main():
     print("GLaDOS Spoke: detecting audio hardware...")
     hw, card = select_hardware()
+    if hw == 'none':
+        print("Audio disabled (GLADOS_AUDIO_DEVICE=none) — running display only")
+        start_spoke('none', None)
+        return
     if card is None:
         print(f"FATAL: no supported audio device found (forced={hw or 'auto'})!")
         print("Available ALSA cards:")

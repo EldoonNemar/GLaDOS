@@ -182,5 +182,49 @@ class TestStartSpokeEnvVars(unittest.TestCase):
         self.assertEqual(captured_env['GLADOS_HW_TYPE'], 'whisplay')
 
 
+class TestNoneMode(unittest.TestCase):
+    """GLADOS_AUDIO_DEVICE=none: display-only bring-up, no audio FATAL."""
+
+    def test_select_hardware_none_override_ignores_cards(self):
+        cards = [(2, "ahubhdmi", "ahubhdmi")]
+        with patch.object(setup_audio, 'list_alsa_cards', return_value=cards):
+            with patch.dict(os.environ, {'GLADOS_AUDIO_DEVICE': 'none'}):
+                result = setup_audio.select_hardware()
+        self.assertEqual(result, ('none', None))
+
+    def test_start_spoke_none_sets_disabled_devices(self):
+        captured_env = {}
+        def mock_execvp(cmd, args):
+            captured_env.update(os.environ)
+        with patch.object(setup_audio, 'os') as mock_os:
+            mock_os.environ = captured_env
+            mock_os.execvp = mock_execvp
+            setup_audio.start_spoke('none', None)
+        self.assertEqual(captured_env['GLADOS_HW_TYPE'], 'none')
+        self.assertEqual(captured_env['GLADOS_CAPTURE_DEVICE'], 'none')
+        self.assertEqual(captured_env['GLADOS_PLAYBACK_DEVICE'], 'none')
+
+    def test_main_none_mode_execs_spoke_without_fatal(self):
+        with patch.object(setup_audio, 'select_hardware',
+                          return_value=('none', None)):
+            with patch.object(setup_audio, 'os') as mock_os:
+                mock_os.environ = {}
+                def fake_execvp(cmd, args):
+                    raise SystemExit  # real exec never returns
+                mock_os.execvp = fake_execvp
+                with self.assertRaises(SystemExit) as ctx:
+                    setup_audio.main()
+        # SystemExit with no code = the mocked exec, NOT the FATAL exit(1)
+        self.assertIsNone(ctx.exception.code)
+
+    def test_main_forced_board_missing_still_fatal(self):
+        with patch.object(setup_audio, 'list_alsa_cards',
+                          return_value=[(2, 'ahubhdmi', 'ahubhdmi')]):
+            with patch.dict(os.environ, {'GLADOS_AUDIO_DEVICE': 'whisplay'}):
+                with self.assertRaises(SystemExit) as ctx:
+                    setup_audio.main()
+        self.assertEqual(ctx.exception.code, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -4,9 +4,12 @@ Tests for the speaker pop / dropped-first-second fixes:
   * spoke Playback._fade_in - ramp at the start of each speech burst
 Pure logic only; no audio hardware, no network.
 """
+import asyncio
+import os
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
@@ -190,6 +193,60 @@ class TestSpokeVolume(unittest.TestCase):
         out = np.frombuffer(captured[0], dtype=np.int16)
         # peak-limited to MAX_PEAK then halved by 50% volume
         self.assertTrue((np.abs(out) == spoke.MAX_PEAK // 2).all())
+
+
+@unittest.skipUnless(_SPOKE, "spoke module not importable in this environment")
+class TestAudioDeviceResolution(unittest.TestCase):
+    """GLADOS_*_DEVICE=none disables a direction (display-only bring-up)."""
+
+    def _resolve(self, env):
+        with mock.patch.dict(os.environ, env):
+            return spoke._resolve_audio_devices()
+
+    def test_both_none(self):
+        cap, play, cap_off, play_off = self._resolve({
+            'GLADOS_CAPTURE_DEVICE': 'none', 'GLADOS_PLAYBACK_DEVICE': 'none',
+        })
+        self.assertEqual((cap, play), ('none', 'none'))
+        self.assertTrue(cap_off and play_off)
+
+    def test_capture_only_none(self):
+        cap, play, cap_off, play_off = self._resolve({
+            'GLADOS_CAPTURE_DEVICE': 'none', 'GLADOS_PLAYBACK_DEVICE': 'plughw:2,0',
+        })
+        self.assertTrue(cap_off)
+        self.assertFalse(play_off)
+        self.assertEqual(play, 'plughw:2,0')
+
+    def test_case_insensitive_and_stripped(self):
+        cap, play, cap_off, play_off = self._resolve({
+            'GLADOS_CAPTURE_DEVICE': '  NONE  ', 'GLADOS_PLAYBACK_DEVICE': 'None',
+        })
+        self.assertTrue(cap_off and play_off)
+
+    def test_unset_uses_defaults_enabled(self):
+        keys = ('GLADOS_CAPTURE_DEVICE', 'GLADOS_PLAYBACK_DEVICE',
+                'GLADOS_AUDIO_DEVICE')
+        saved = {k: os.environ.pop(k) for k in keys if k in os.environ}
+        try:
+            cap, play, cap_off, play_off = spoke._resolve_audio_devices()
+        finally:
+            os.environ.update(saved)
+        self.assertEqual(cap, spoke.DEFAULT_DEVICE)
+        self.assertEqual(play, spoke.DEFAULT_DEVICE)
+        self.assertFalse(cap_off or play_off)
+
+
+@unittest.skipUnless(_SPOKE, "spoke module not importable in this environment")
+class TestPlaybackDisabled(unittest.TestCase):
+    """Playback.write must be a silent no-op when playback is disabled."""
+
+    def test_write_drops_frames_when_disabled(self):
+        pb = spoke.Playback()
+        with mock.patch.object(spoke, 'PLAYBACK_DISABLED', True):
+            asyncio.run(pb.write(b'\x01\x02' * 100))
+        self.assertEqual(len(pb.buffer), 0)
+        self.assertIsNone(pb.proc)
 
 
 if __name__ == "__main__":
