@@ -728,6 +728,31 @@ class TestOpenOnOrangePiZero2W(unittest.TestCase):
             hat.close()
 
 
+class TestSpokeComposeExposesHatDevices(unittest.TestCase):
+    """The spoke container must be able to see the HAT's GPIO and SPI nodes.
+
+    Without these device entries in docker-compose-spoke.yml the display
+    silently auto-disables on the Orange Pi Zero 2W (audio still works),
+    which is exactly how the bug shipped.
+    """
+
+    def test_hat_devices_passed_through(self):
+        import yaml
+        compose_path = REPO / "docker" / "docker-compose-spoke.yml"
+        compose = yaml.safe_load(compose_path.read_text())
+        devices = compose["services"]["glados_spoke"]["devices"]
+        self.assertIn("/dev/gpiochip0:/dev/gpiochip0", devices)
+        self.assertIn("/dev/spidev1.0:/dev/spidev1.0", devices)
+        # Audio must remain passed through.
+        self.assertIn("/dev/snd:/dev/snd", devices)
+
+    def test_compose_documents_spi1_overlay_requirement(self):
+        # If someone later drops the spidev device entry, this fails so the
+        # reason (enable the SPI1 DT overlay first) is not lost.
+        text = (REPO / "docker" / "docker-compose-spoke.yml").read_text()
+        self.assertIn("spi1-cs0-spidev", text)
+
+
 if __name__ == "__main__":
     unittest.main()
 

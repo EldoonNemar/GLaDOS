@@ -9,6 +9,17 @@ services:
     network_mode: host
     devices:
       - "/dev/snd:/dev/snd"
+      # LAFVIN HAT display. The Orange Pi Zero 2W's SoC GPIO controller is
+      # gpiochip0 and the HAT's ST7789 is on SPI1 (CS0). SPI1 is OFF by
+      # default in the BSP kernel — enable it before first boot of the spoke
+      # (sudo orangepi-config -> System -> Hardware -> "spi1-cs0-spidev" ->
+      # Save -> Reboot, or add
+      # FDTOVERLAYS /dtbs/allwinner/overlay/sun50i-h616-spi1-cs0-spidev.dtbo
+      # to /boot/extlinux/extlinux.conf). If /dev/spidev1.0 does not exist
+      # docker will refuse to start this container, so enable the overlay
+      # first. The display degrades to off at runtime if the nodes vanish.
+      - "/dev/gpiochip0:/dev/gpiochip0"
+      - "/dev/spidev1.0:/dev/spidev1.0"
     environment:
       - GLADOS_HUB_URL=ws://192.168.1.58:5051
       - GLADOS_DEVICE_ID=OrangePi2W
