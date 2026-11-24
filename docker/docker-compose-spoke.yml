@@ -24,3 +24,7 @@ services:
       - GLADOS_HUB_URL=ws://192.168.1.58:5051
       - GLADOS_DEVICE_ID=OrangePi2W
       - GLADOS_AUDIO_DEVICE=whisplay
+      # The container's /proc has no device-tree, so lafvin.py cannot
+      # autodetect the SBC from inside; pin the HAT profile explicitly.
+      # Must match the devices: entries below.
+      - GLADOS_LAFVIN_BOARD=orangepi-zero-2w

@@ -99,14 +99,33 @@ _ORANGE_PI_ZERO_2W = BoardProfile(
 )
 
 
+_KNOWN_BOARDS = {
+    _RASPBERRY_PI.name: _RASPBERRY_PI,
+    _ORANGE_PI_ZERO_2W.name: _ORANGE_PI_ZERO_2W,
+}
+
+
 def detect_board(model_path: str = "/proc/device-tree/model") -> BoardProfile:
     """Map the running SBC to its HAT BoardProfile.
 
-    Only the Raspberry Pi and the Orange Pi Zero 2W are supported. An
-    unknown or missing model keeps the legacy Raspberry Pi mapping so
-    behavior never changes on unsupported hosts — `try_open` still fails
-    gracefully when the expected SPI device is absent.
+    ``GLADOS_LAFVIN_BOARD`` overrides detection. That override is what the
+    container actually uses: a container's ``/proc`` does not expose the
+    host's device tree, so model-file detection always falls through inside
+    Docker (compose sets the variable explicitly). On bare metal the host
+    ``/proc/device-tree/model`` is used. An unknown or missing model keeps
+    the legacy Raspberry Pi mapping so behavior never changes on
+    unsupported hosts — `try_open` still fails gracefully when the expected
+    SPI device is absent.
     """
+    override = os.environ.get("GLADOS_LAFVIN_BOARD", "").strip().lower()
+    if override:
+        profile = _KNOWN_BOARDS.get(override)
+        if profile is not None:
+            return profile
+        logger.warning(
+            "Unknown GLADOS_LAFVIN_BOARD=%r; falling back to "
+            "device-tree detection", override,
+        )
     try:
         model = Path(model_path).read_bytes().decode("utf-8", "replace")
     except OSError:

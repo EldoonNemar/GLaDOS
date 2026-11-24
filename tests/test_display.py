@@ -10,6 +10,7 @@ test_playback.py does (importlib, so `import main` can't collide).
 """
 import ctypes
 import importlib.util
+import os
 import sys
 import threading
 import types
@@ -646,6 +647,45 @@ class TestBoardDetection(unittest.TestCase):
             self.assertEqual(lafvin.BUTTON_PIN, 17)
             self.assertEqual(lafvin.SPI_BUS, 0)
 
+    def test_env_override_selects_zero_2w_profile(self):
+        # The container case: no device tree visible under /proc, the env
+        # var (set by compose) is what selects the profile.
+        with mock.patch.dict(os.environ,
+                             {"GLADOS_LAFVIN_BOARD": "orangepi-zero-2w"}):
+            b = lafvin.detect_board(model_path="/nonexistent/model")
+        self.assertEqual(b, lafvin._ORANGE_PI_ZERO_2W)
+
+    def test_env_override_selects_rpi_profile(self):
+        with mock.patch.dict(os.environ,
+                             {"GLADOS_LAFVIN_BOARD": "raspberry-pi"}):
+            b = lafvin.detect_board(model_path="/nonexistent/model")
+        self.assertEqual(b, lafvin._RASPBERRY_PI)
+
+    def test_env_override_wins_over_model_file(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "model"
+            p.write_bytes(b"Orange Pi Zero 2W\x00")
+            with mock.patch.dict(os.environ,
+                                 {"GLADOS_LAFVIN_BOARD": "raspberry-pi"}):
+                self.assertEqual(lafvin.detect_board(str(p)),
+                                 lafvin._RASPBERRY_PI)
+
+    def test_unknown_env_override_falls_back_to_detection(self):
+        # A typo in the compose file must not crash import; detection and
+        # the RPi fallback still apply.
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "model"
+            p.write_bytes(b"Orange Pi Zero 2W\x00")
+            with mock.patch.dict(os.environ,
+                                 {"GLADOS_LAFVIN_BOARD": "banana-pi"}):
+                self.assertEqual(lafvin.detect_board(str(p)),
+                                 lafvin._ORANGE_PI_ZERO_2W)
+                self.assertEqual(
+                    lafvin.detect_board(str(Path(d) / "nope")),
+                    lafvin._RASPBERRY_PI)
+
 
 class RecordingGpio(FakeGpio):
     """FakeGpio that records which pins were requested."""
@@ -751,6 +791,17 @@ class TestSpokeComposeExposesHatDevices(unittest.TestCase):
         # reason (enable the SPI1 DT overlay first) is not lost.
         text = (REPO / "docker" / "docker-compose-spoke.yml").read_text()
         self.assertIn("spi1-cs0-spidev", text)
+
+    def test_compose_pins_the_board_profile_env(self):
+        # Inside the container /proc/device-tree is invisible, so the HAT
+        # profile must come from an explicit env var — otherwise the spoke
+        # falls back to the Raspberry Pi pin map on the Orange Pi.
+        import yaml
+        compose = yaml.safe_load(
+            (REPO / "docker" / "docker-compose-spoke.yml").read_text(),
+        )
+        env = compose["services"]["glados_spoke"]["environment"]
+        self.assertIn("GLADOS_LAFVIN_BOARD=orangepi-zero-2w", env)
 
 
 if __name__ == "__main__":
