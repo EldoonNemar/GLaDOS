@@ -1,6 +1,6 @@
 # Build stage: spidev is a C extension and needs a compiler; keep it out of
-# the final image. The LAFVIN HAT display only works on a Raspberry Pi with
-# SPI enabled and the HAT's /dev/spidev0.0 + /dev/gpiochip0 exposed to the
+# the final image. The LAFVIN HAT display works on a Raspberry Pi (SPI0) or
+# an Orange Pi Zero 2W (SPI1) with the HAT's /dev/gpiochip0 exposed to the
 # container; on any other host the display auto-disables at runtime.
 FROM python:3.12-slim AS build
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential && \

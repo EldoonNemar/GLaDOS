@@ -581,6 +581,153 @@ class TestAudioMeter(unittest.TestCase):
         asyncio.run(spoke.display_task(asyncio.Event()))  # returns, no raise
 
 
+# ── lafvin: SBC board detection (Raspberry Pi vs Orange Pi Zero 2W) ──
+
+class TestBoardDetection(unittest.TestCase):
+    def test_detect_orange_pi_zero_2_w(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "model"
+            p.write_bytes(b"Orange Pi Zero 2W\x00")
+            b = lafvin.detect_board(str(p))
+        self.assertEqual(b.name, "orangepi-zero-2w")
+        self.assertEqual(b.spi_bus, 1)
+        self.assertEqual(b.spi_speed_hz, 50_000_000)
+        # H618 SoC line offsets for the HAT header pins (verified against
+        # the official Zero 2W wiki 40-pin table).
+        self.assertEqual(b.lcd_dc, 259)      # board 13, PI3
+        self.assertEqual(b.lcd_rst, 269)     # board 7, PI13
+        self.assertEqual(b.backlight, 261)   # board 15, PI5
+        self.assertEqual(b.rgb_r, 262)       # board 22, PI6
+        self.assertEqual(b.rgb_g, 228)       # board 18, PH4
+        self.assertEqual(b.rgb_b, 270)       # board 16, PI14
+        self.assertEqual(b.button, 226)      # board 11, PH2
+
+    def test_detect_raspberry_pi(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "model"
+            p.write_bytes(b"Raspberry Pi 5 Model B Rev 1.1\x00")
+            b = lafvin.detect_board(str(p))
+        self.assertEqual(b.name, "raspberry-pi")
+        self.assertEqual(b.spi_bus, 0)
+        self.assertEqual(b.spi_speed_hz, 100_000_000)
+        self.assertEqual((b.lcd_dc, b.lcd_rst, b.backlight), (27, 4, 22))
+        self.assertEqual((b.rgb_r, b.rgb_g, b.rgb_b, b.button), (25, 24, 23, 17))
+
+    def test_detect_unknown_or_missing_model_falls_back_to_rpi(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "model"
+            p.write_bytes(b"Radxa Zero 3W\x00")
+            self.assertEqual(lafvin.detect_board(str(p)), lafvin._RASPBERRY_PI)
+            self.assertEqual(lafvin.detect_board(str(Path(d) / "nope")),
+                             lafvin._RASPBERRY_PI)
+
+    def test_zero_2_w_pins_never_match_rpi_values(self):
+        # Regression: the 22/24 mix-up put RPi GPIO numbers (25/8/...)
+        # into an Orange Pi pin map. Every HAT pin must differ between
+        # the two SoC families.
+        z, r = lafvin._ORANGE_PI_ZERO_2W, lafvin._RASPBERRY_PI
+        for field in ("lcd_dc", "lcd_rst", "backlight",
+                      "rgb_r", "rgb_g", "rgb_b", "button"):
+            self.assertNotEqual(getattr(z, field), getattr(r, field),
+                                field)
+        # The two pins that actually got mixed up:
+        self.assertEqual(z.rgb_r, 262)   # not RPi GPIO 25
+        self.assertEqual(z.button, 226)  # not RPi GPIO 17
+        self.assertEqual(z.spi_bus, 1)   # not RPi SPI0
+
+    def test_module_constants_track_detected_board(self):
+        # On a host without a recognized model (this CI box) the module
+        # constants must keep the legacy Raspberry Pi values.
+        if lafvin.BOARD.name == "raspberry-pi":
+            self.assertEqual(lafvin.LCD_DC_PIN, 27)
+            self.assertEqual(lafvin.BUTTON_PIN, 17)
+            self.assertEqual(lafvin.SPI_BUS, 0)
+
+
+class RecordingGpio(FakeGpio):
+    """FakeGpio that records which pins were requested."""
+
+    def __init__(self):
+        super().__init__()
+        self.outputs = {}
+        self.inputs = {}
+
+    def output(self, pin, label):
+        line = super().output(pin, label)
+        self.outputs[pin] = line
+        return line
+
+    def input(self, pin, label):
+        line = super().input(pin, label)
+        self.inputs[pin] = line
+        return line
+
+
+class TestOpenOnOrangePiZero2W(unittest.TestCase):
+    """_open with the Zero 2W profile must open SPI1 and request the H618
+    offsets — not the RPi BCM numbers."""
+
+    def _fake_spidev_module(self):
+        spi_mod = types.ModuleType("spidev")
+        opened = {}
+
+        class FakeSpiDev:
+            max_speed_hz = 0
+            mode = 0
+
+            def open(self, bus, cs):
+                opened["bus"] = bus
+                opened["cs"] = cs
+
+            def close(self):
+                pass
+
+            def xfer2(self, data):
+                return data
+
+            def writebytes2(self, data):
+                return len(data)
+
+        spi_mod.SpiDev = FakeSpiDev
+        return spi_mod, opened
+
+    def test_open_uses_spi1_and_h618_offsets(self):
+        spi_mod, opened = self._fake_spidev_module()
+        gpio = RecordingGpio()
+        hat = LafvinHat(board=lafvin._ORANGE_PI_ZERO_2W)
+        with mock.patch.dict(sys.modules, {"spidev": spi_mod}), \
+             mock.patch.object(lafvin, "_GpiodGpio",
+                               lambda **k: gpio):
+            hat._open(spi_mod)
+        try:
+            self.assertEqual(opened, {"bus": 1, "cs": 0})
+            self.assertEqual(hat._spi._dev.max_speed_hz, 50_000_000)
+            self.assertEqual(set(gpio.outputs),
+                             {259, 269, 261, 262, 228, 270})
+            self.assertEqual(set(gpio.inputs), {226})
+        finally:
+            hat.close()
+
+    def test_try_open_passes_board_profile(self):
+        spi_mod, opened = self._fake_spidev_module()
+        gpio = RecordingGpio()
+        with mock.patch.dict(sys.modules, {"spidev": spi_mod}), \
+             mock.patch.object(lafvin, "_GpiodGpio",
+                               lambda **k: gpio):
+            hat = LafvinHat.try_open(board=lafvin._ORANGE_PI_ZERO_2W)
+        self.assertIsNotNone(hat)
+        try:
+            self.assertEqual(opened["bus"], 1)
+            self.assertEqual(set(gpio.outputs),
+                             {259, 269, 261, 262, 228, 270})
+            self.assertEqual(set(gpio.inputs), {226})
+        finally:
+            hat.close()
+
+
 if __name__ == "__main__":
     unittest.main()
 

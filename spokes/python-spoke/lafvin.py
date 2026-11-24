@@ -2,11 +2,30 @@
 LAFVIN Audio Display HAT (LB011) hardware layer for the python spoke.
 
 Hardware (from LAFVIN's accepted driver, lfvintech/LAFVIN-Audio-Display-HAT):
-  Display   1.69" IPS 240x280 ST7789, 4-wire SPI bus 0 CS 0 @ 100 MHz,
-            row offset 20; DC = GPIO27 (board pin 13), RST = GPIO4 (pin 7)
-  RGB LED   GPIO 25/24/23 (R/G/B), ACTIVE-LOW, 100 Hz software PWM
-  Button    GPIO17 (pin 11), polled at 5 ms
-  Backlight GPIO22 (pin 15)
+  Display   1.69" IPS 240x280 ST7789, 4-wire SPI CS 0 @ 100 MHz,
+            row offset 20
+  RGB LED   ACTIVE-LOW, 100 Hz software PWM
+  Button    polled at 5 ms
+  Backlight software PWM
+
+The 40-pin header lands on different SoC signals per SBC, so the pin map
+is selected from the device-tree model at import time (see
+`detect_board` / `BoardProfile`):
+
+  Raspberry Pi (BCM)        Orange Pi Zero 2W (H618)
+  board pin 13  DC   27        board pin 13  DC   259 (PI3)
+  board pin  7  RST   4        board pin  7  RST  269 (PI13)
+  board pin 15  BL   22        board pin 15  BL   261 (PI5)
+  board pin 22  R    25        board pin 22  R    262 (PI6)
+  board pin 18  G    24        board pin 18  G    228 (PH4)
+  board pin 16  B    23        board pin 16  B    270 (PI14)
+  board pin 11  BTN  17        board pin 11  BTN  226 (PH2)
+  SPI bus 0 @ 100 MHz         SPI bus 1 @ 50 MHz
+
+The Zero 2W offsets are verified against the official Orange Pi Zero 2W
+wiki 40-pin table (H618 ports are 32 pins wide: PH base 224, PI base 256).
+In particular board pins 22 and 24 are NOT the Raspberry Pi values
+(GPIO 25 / GPIO 8): on the Zero 2W they are PI6 and PH5 (SPI1_CS0).
 
 The ST7789 init sequence below is byte-for-byte the sequence LAFVIN ships
 (verified against their St7789Display) — do not "clean it up"; the panel
@@ -23,8 +42,11 @@ import ctypes
 import fcntl
 import logging
 import os
+import re
 import threading
 import time
+from dataclasses import dataclass
+from pathlib import Path
 
 logger = logging.getLogger("glados_spoke.lafvin")
 
@@ -32,18 +54,82 @@ WIDTH = 240
 HEIGHT = 280
 ROW_OFFSET = 20  # panel vertical gap (ST7789 240x280 1.69" layout)
 
-# Board pin -> BCM GPIO (40-pin header)
-LCD_DC_PIN = 27     # board pin 13
-LCD_RST_PIN = 4     # board pin 7
-BACKLIGHT_PIN = 22  # board pin 15
-RGB_R_PIN = 25      # board pin 22
-RGB_G_PIN = 24      # board pin 18
-RGB_B_PIN = 23      # board pin 16
-BUTTON_PIN = 17     # board pin 11 (input)
+# Per-SBC pin maps for the HAT's 40-pin header. Offsets are line numbers
+# on the SoC's main GPIO chip (/dev/gpiochip0 on both boards).
+@dataclass(frozen=True)
+class BoardProfile:
+    name: str
+    spi_bus: int
+    spi_speed_hz: int
+    lcd_dc: int      # board pin 13
+    lcd_rst: int     # board pin 7
+    backlight: int   # board pin 15
+    rgb_r: int       # board pin 22
+    rgb_g: int       # board pin 18
+    rgb_b: int       # board pin 16
+    button: int      # board pin 11 (input)
 
-SPI_BUS = 0
+
+_RASPBERRY_PI = BoardProfile(
+    name="raspberry-pi",
+    spi_bus=0,
+    spi_speed_hz=100_000_000,
+    lcd_dc=27,
+    lcd_rst=4,
+    backlight=22,
+    rgb_r=25,
+    rgb_g=24,
+    rgb_b=23,
+    button=17,
+)
+
+_ORANGE_PI_ZERO_2W = BoardProfile(
+    name="orangepi-zero-2w",
+    spi_bus=1,
+    # H618 SPI1: conservative default; the wiki loopback test runs at
+    # 500 kHz and the panel was validated at 100 MHz on RPi SPI0.
+    spi_speed_hz=50_000_000,
+    lcd_dc=259,      # PI3
+    lcd_rst=269,     # PI13
+    backlight=261,   # PI5
+    rgb_r=262,       # PI6
+    rgb_g=228,       # PH4
+    rgb_b=270,       # PI14
+    button=226,      # PH2
+)
+
+
+def detect_board(model_path: str = "/proc/device-tree/model") -> BoardProfile:
+    """Map the running SBC to its HAT BoardProfile.
+
+    Only the Raspberry Pi and the Orange Pi Zero 2W are supported. An
+    unknown or missing model keeps the legacy Raspberry Pi mapping so
+    behavior never changes on unsupported hosts — `try_open` still fails
+    gracefully when the expected SPI device is absent.
+    """
+    try:
+        model = Path(model_path).read_bytes().decode("utf-8", "replace")
+    except OSError:
+        model = ""
+    compact = re.sub(r"\s+", "", model).lower()
+    if "orangepizero2w" in compact:
+        return _ORANGE_PI_ZERO_2W
+    return _RASPBERRY_PI
+
+
+BOARD = detect_board()
+
+# Backward-compatible module constants (tests and old callers import these).
+LCD_DC_PIN = BOARD.lcd_dc
+LCD_RST_PIN = BOARD.lcd_rst
+BACKLIGHT_PIN = BOARD.backlight
+RGB_R_PIN = BOARD.rgb_r
+RGB_G_PIN = BOARD.rgb_g
+RGB_B_PIN = BOARD.rgb_b
+BUTTON_PIN = BOARD.button
+SPI_BUS = BOARD.spi_bus
 SPI_CS = 0
-SPI_SPEED_HZ = 100_000_000
+SPI_SPEED_HZ = BOARD.spi_speed_hz
 PWM_FREQ = 100  # Hz, software PWM for LED/backlight (matches LAFVIN)
 
 # ST7789 init — LAFVIN's accepted sequence (MADCTL 0xC0, 16-bit pixels,
@@ -158,11 +244,12 @@ class _SoftPwm:
 class RgbLed:
     """Active-LOW LED: brightness percent inverts the physical duty cycle."""
 
-    def __init__(self, gpio, stop_event=None):
+    def __init__(self, gpio, stop_event=None, board=None):
+        board = board or BOARD
         self._lines = {
-            "r": gpio.output(RGB_R_PIN, "glados-rgb-r"),
-            "g": gpio.output(RGB_G_PIN, "glados-rgb-g"),
-            "b": gpio.output(RGB_B_PIN, "glados-rgb-b"),
+            "r": gpio.output(board.rgb_r, "glados-rgb-r"),
+            "g": gpio.output(board.rgb_g, "glados-rgb-g"),
+            "b": gpio.output(board.rgb_b, "glados-rgb-b"),
         }
         self._stop = stop_event or threading.Event()
         self._pwms = {k: _SoftPwm(line) for k, line in self._lines.items()}
@@ -190,8 +277,9 @@ class LafvinHat:
     """Facade: display + LED + backlight + button. open() may fail when the
     HAT/driver isn't present — the spoke treats that as 'no display'."""
 
-    def __init__(self, on_press=None):
+    def __init__(self, on_press=None, board=None):
         self.on_press = on_press
+        self._board = board  # None -> detect_board() profile at open time
         self._gpio = None
         self._spi = None
         self.display = None
@@ -204,41 +292,45 @@ class LafvinHat:
         self._backlight = 100
 
     @classmethod
-    def try_open(cls, on_press=None) -> "LafvinHat | None":
+    def try_open(cls, on_press=None, board=None) -> "LafvinHat | None":
         try:
             import spidev
         except Exception as e:
             logger.warning("[LAFVIN] unavailable (%s) — display disabled", e)
             return None
-        hat = cls(on_press=on_press)
+        hat = cls(on_press=on_press, board=board)
         try:
             hat._open(spidev)
         except Exception as e:
             logger.warning("[LAFVIN] open failed (%s) — display disabled", e)
             hat.close()
             return None
-        logger.info("[LAFVIN] HAT ready (ST7789 240x280 @ %d MHz)", SPI_SPEED_HZ)
+        profile = hat._board or BOARD
+        logger.info("[LAFVIN] HAT ready on %s (ST7789 240x280 @ %d MHz, SPI%d)",
+                    profile.name, profile.spi_speed_hz, profile.spi_bus)
         return hat
 
-    def _open(self, spidev):
+    def _open(self, spidev, board=None):
+        board = board or self._board or BOARD
+        self._board = board
         self._gpio = _GpiodGpio()
         self._spi = _Spi(spidev)
-        self._spi.open(SPI_BUS, SPI_CS, SPI_SPEED_HZ)
+        self._spi.open(board.spi_bus, SPI_CS, board.spi_speed_hz)
         self.display = St7789(
             self._spi,
-            self._gpio.output(LCD_DC_PIN, "glados-lcd-dc"),
-            self._gpio.output(LCD_RST_PIN, "glados-lcd-rst"),
+            self._gpio.output(board.lcd_dc, "glados-lcd-dc"),
+            self._gpio.output(board.lcd_rst, "glados-lcd-rst"),
         )
         self.display.initialize()
         self.display.fill(0)
-        self.led = RgbLed(self._gpio, stop_event=self._stop_event)
-        bl = self._gpio.output(BACKLIGHT_PIN, "glados-backlight")
+        self.led = RgbLed(self._gpio, stop_event=self._stop_event, board=board)
+        bl = self._gpio.output(board.backlight, "glados-backlight")
         self._backlight_pwm = _SoftPwm(bl, stop_value=0)
         self._backlight_pwm.set_duty(float(self._backlight))
         threading.Thread(target=self._backlight_pwm.run,
                          args=(self._stop_event,), daemon=True,
                          name="lafvin-backlight").start()
-        self._button_line = self._gpio.input(BUTTON_PIN, "glados-button")
+        self._button_line = self._gpio.input(board.button, "glados-button")
         self._button_stop.clear()
         self._button_thread = threading.Thread(target=self._poll_button,
                                                daemon=True, name="lafvin-button")
