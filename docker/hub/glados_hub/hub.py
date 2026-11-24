@@ -312,7 +312,9 @@ async def _execute_light_command(target: str, state: str, speaker: str) -> str |
 
     Returns the verified set_lights report, or None when the command is not
     actionable (nothing resolvable) — the backstop must fail SAFE: better
-    to let the LLM answer than to flip a light the user didn't name.
+    not to touch a light the user didn't name. The caller must then correct
+    the LLM's unverified reply (see _call_response_llm) — a None result must
+    never let "they're on, and confirmed" through.
     """
     reg = kasa_lights.REGISTRY
     names = reg.resolve(target)
@@ -416,6 +418,19 @@ async def _call_response_llm(session: Session, utterance: str = "", extra_contex
                 )
                 if _LIGHT_FAIL_RE.search(result):
                     light_failed = True
+            else:
+                # The backstop declined to act (unresolvable target) — and
+                # the unverified reply must not pass through either: that is
+                # exactly where "they're on, and confirmed" lies are born.
+                # Force a re-answer: claim nothing, ask which light.
+                notes.append(
+                    "INTERNAL NOTE (not user speech): the user's last words were a "
+                    f"light command ({utterance!r}), but you did not call a light "
+                    "tool and I could not tell which light(s) they meant, so I did "
+                    "NOT act. Do NOT claim any light state or that anything changed. "
+                    "Ask which light they mean. The lights you can control: "
+                    + kasa_lights.REGISTRY.describe()
+                )
         if light_failed:
             notes.append(
                 "INTERNAL NOTE (not user speech): a light device FAILED to change "

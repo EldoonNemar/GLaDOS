@@ -195,6 +195,7 @@ _LIGHT_NOUNS = (
 )
 _LIGHT_NOISE = (
     "the", "a", "an", "please", "now", "it", "them",
+    "all", "of", "every", "each", "whole", "entire",
     "glados", "gladys", "glady's", "glahdos",
 )
 _LIGHT_GENERIC = ("light", "lights", "lamp", "lamps")
@@ -208,7 +209,9 @@ def light_command(text: str) -> tuple[str, str] | None:
     'the lights are flickering', 'turn up the heat', 'is the light on'
     -> None (no verb). `target` is the remaining words with noise and
     generic nouns stripped, for the Kasa registry resolver; an empty
-    target means "the lights" with no room named.
+    target means "the lights" with no room named. When the utterance says
+    "all the lights" (scope word, no room) the target is the sentinel
+    "all" — the resolver maps that to every configured light.
     """
     words = re.findall(r"[a-z']+", (text or "").lower())
     if not words:
@@ -227,6 +230,9 @@ def light_command(text: str) -> tuple[str, str] | None:
         and w != state
         and w not in _LIGHT_GENERIC
     )
+    if not target and any(w in ("all", "every") for w in words):
+        # "turn on all the lights": explicit scope, no room named.
+        return "all", state
     return target, state
 
 

@@ -74,6 +74,10 @@ class LightRegistry:
         q = re.sub(r"\s+", " ", q).strip()
         if not q:
             return []
+        if q in ("all", "everything"):
+            # Explicit scope: every configured light ("all the lights"; the
+            # LLM also passes "all" when the user asks for everything).
+            return list(self.lights)
         if q in self.lights:
             return [q]
         if q in self.groups:
