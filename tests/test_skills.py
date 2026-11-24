@@ -46,6 +46,19 @@ CONFIG = {
 ALL_THREE = ["livingroom ceiling", "livingroom left", "livingroom right"]
 
 
+def quiet_hours_off():
+    """Context manager: pin quiet hours OFF for tests that exercise the
+    announce/nag/camera paths.
+
+    Those paths consult glados_hub.quiet, which reads the LIVE
+    config/quiet_hours.json — a user-configured window (e.g. 21:00-07:00)
+    suppresses exactly the announcements these tests assert on whenever the
+    suite happens to run inside that window. Quiet-hours enforcement itself
+    is covered by test_quiet.py.
+    """
+    return mock.patch("glados_hub.quiet.is_active", return_value=False)
+
+
 def make_registry():
     # TemporaryDirectory (not NamedTemporaryFile(delete=False)): the file is
     # read fully by LightRegistry.load, so it can be removed immediately.
@@ -353,6 +366,8 @@ class TestTimers(unittest.IsolatedAsyncioTestCase):
 
 class TestSkillsDispatch(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
+        self._quiet_off = quiet_hours_off()
+        self._quiet_off.start()
         kasa_lights.set_registry(make_registry())
         skills.TIMER_STORE = timers.TimerStore()
         skills.set_announce_fn(self._fake_announce)
@@ -365,6 +380,7 @@ class TestSkillsDispatch(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         kasa_lights.set_registry(kasa_lights.LightRegistry.load())
         skills.set_announce_fn(None)
+        self._quiet_off.stop()
 
     async def test_unknown_tool(self):
         out = await skills.execute_tool("explode_thing", {}, speaker="a")
@@ -453,12 +469,15 @@ class TestAnnounce(unittest.IsolatedAsyncioTestCase):
             self.ws = object()
 
     def setUp(self):
+        self._quiet_off = quiet_hours_off()
+        self._quiet_off.start()
         self._saved = dict(hub.active_sessions)
         hub.active_sessions.clear()
 
     def tearDown(self):
         hub.active_sessions.clear()
         hub.active_sessions.update(self._saved)
+        self._quiet_off.stop()
 
     async def test_announce_skips_speaker_and_reports_busy(self):
         hub.active_sessions.update({
@@ -514,7 +533,12 @@ class TestNag(unittest.IsolatedAsyncioTestCase):
             self.echo_level = 0.0
 
     def setUp(self):
+        self._quiet_off = quiet_hours_off()
+        self._quiet_off.start()
         self.beep_times = []
+
+    def tearDown(self):
+        self._quiet_off.stop()
 
     def _beeps(self, ws):
         return [f for f in ws.frames if f[0] == 0x11]
@@ -811,12 +835,15 @@ class TestNagNote(unittest.IsolatedAsyncioTestCase):
             self.nag_note_until = 0.0
 
     def setUp(self):
+        self._quiet_off = quiet_hours_off()
+        self._quiet_off.start()
         self._saved = dict(hub.active_sessions)
         hub.active_sessions.clear()
 
     def tearDown(self):
         hub.active_sessions.clear()
         hub.active_sessions.update(self._saved)
+        self._quiet_off.stop()
 
     async def test_note_set_when_nag_starts(self):
         s = self.NagNoteSession()
@@ -939,6 +966,31 @@ class TestLightCommand(unittest.TestCase):
         from glados_hub import decision
         self.assertEqual(decision.light_command("switch off the lights"), ("", "off"))
 
+    def test_all_of_room_phrase(self):
+        # The real 2026-11-23 transcript that failed: 'all of' is scope
+        # filler; the target must come out as the room, not 'all of living room'.
+        from glados_hub import decision
+        self.assertEqual(
+            decision.light_command("turn on all of the living room light"),
+            ("living room", "on"))
+
+    def test_all_lights_sentinel(self):
+        # Scope word, no room: the "all" sentinel the resolver maps to
+        # every configured light.
+        from glados_hub import decision
+        self.assertEqual(decision.light_command("turn on all the lights"), ("all", "on"))
+
+    def test_every_light_sentinel(self):
+        from glados_hub import decision
+        self.assertEqual(decision.light_command("switch off every light"), ("all", "off"))
+
+    def test_all_with_named_room_stays_room(self):
+        # 'all the kitchen lights' means the kitchen, not the whole house.
+        from glados_hub import decision
+        self.assertEqual(
+            decision.light_command("turn on all the kitchen lights"),
+            ("kitchen", "on"))
+
     def test_flickering_is_not_a_command(self):
         from glados_hub import decision
         self.assertIsNone(decision.light_command("the lights are flickering"))
@@ -979,6 +1031,12 @@ class TestResolveWhitespace(unittest.TestCase):
 
     def test_joined_name_still_works(self):
         self.assertEqual(self.reg.resolve("livingroom"), ALL_THREE)
+
+    def test_all_resolves_every_light(self):
+        self.assertEqual(self.reg.resolve("all"), ALL_THREE)
+        # noise around the sentinel must not break it
+        self.assertEqual(self.reg.resolve("all the lights"), ALL_THREE)
+        self.assertEqual(self.reg.resolve("everything"), ALL_THREE)
 
 
 @unittest.skipIf(hub is None, "fastapi not installed in test env")
@@ -1095,7 +1153,11 @@ class TestLightBackstop(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reply, "Time is a social construct.")
         self.assertEqual(len(calls), 1)  # no extra grounded re-call
 
-    async def test_unresolvable_target_does_not_act(self):
+    async def test_unresolvable_target_does_not_act_or_claim(self):
+        # Regression (2026-11-23): the backstop declined to act, and the
+        # model's unverified "on and confirmed" was spoken verbatim. Now the
+        # reply is re-asked with an anti-claim note instead of passing
+        # through.
         from glados_hub import llm as llm_mod
         s = self._session()
         s.add_message("user", "turn off the hallway lights")
@@ -1103,7 +1165,10 @@ class TestLightBackstop(unittest.IsolatedAsyncioTestCase):
 
         async def fake_msg(client, msgs, **kw):
             calls.append(msgs)
-            return {"content": "I have no hallway, test subject."}
+            if len(calls) == 1:
+                # The lie the model wants to tell.
+                return {"content": "The hallway lights are off and confirmed."}
+            return {"content": "Which light do you mean? I only have the living room ones."}
 
         async def fake_set_lights(target, state, brightness=None):
             self.fail("unresolvable target must not touch hardware")
@@ -1111,8 +1176,58 @@ class TestLightBackstop(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(llm_mod, "call_llama_message", fake_msg), \
              mock.patch.object(kasa_lights, "set_lights", fake_set_lights), \
              mock.patch.object(hub, "GEMINI_API_KEY", ""):
-            await hub._call_response_llm(s, "turn off the hallway lights")
-        self.assertEqual(len(calls), 1)  # no backstop, no re-call
+            reply = await hub._call_response_llm(s, "turn off the hallway lights")
+        self.assertEqual(len(calls), 2)  # grounded re-call, not the raw lie
+        note = calls[1][-1]["content"]
+        self.assertIn("INTERNAL NOTE", note)
+        self.assertIn("Do NOT claim", note)
+        self.assertIn("hallway", note)              # what she heard
+        self.assertIn("livingroom ceiling", note)   # her actual inventory
+        self.assertNotIn("confirmed", reply)
+
+    async def test_all_of_room_transcript_backstop_fires(self):
+        # The exact 2026-11-23 transcript: 'turn on all of the living room
+        # light'. The model skipped the tool; the backstop must resolve it
+        # to the livingroom group, run set_lights, and ground the reply.
+        from glados_hub import llm as llm_mod
+        s = self._session()
+        s.add_message("user", "turn on all of the living room light")
+        calls, set_calls = [], []
+
+        async def fake_msg(client, msgs, **kw):
+            calls.append(msgs)
+            if len(calls) == 1:
+                return {"content": "All three living room lights are on and confirmed."}
+            return {"content": "They are on — I checked each one."}
+
+        async def fake_set_lights(target, state, brightness=None):
+            set_calls.append((target, state))
+            return "livingroom ceiling: on; livingroom left: on; livingroom right: on"
+
+        with mock.patch.object(llm_mod, "call_llama_message", fake_msg), \
+             mock.patch.object(kasa_lights, "set_lights", fake_set_lights), \
+             mock.patch.object(hub, "GEMINI_API_KEY", ""):
+            reply = await hub._call_response_llm(s, "turn on all of the living room light")
+
+        self.assertEqual(set_calls, [("living room", "on")])  # the group
+        self.assertEqual(len(calls), 2)
+        note = calls[1][-1]["content"]
+        self.assertIn("INTERNAL NOTE", note)
+        self.assertIn("livingroom ceiling: on", note)
+        self.assertNotIn("confirmed", reply)
+
+    async def test_all_sentinel_runs_every_light(self):
+        set_calls = []
+
+        async def fake_set_lights(target, state, brightness=None):
+            set_calls.append((target, state))
+            return "livingroom ceiling: on"
+
+        with mock.patch.object(kasa_lights, "set_lights", fake_set_lights):
+            out = await hub._execute_light_command("all", "on", "dev1")
+        self.assertEqual(set_calls, [("all", "on")])
+        self.assertIn("on", out)
+
 
     async def test_no_room_named_falls_back_to_sole_group(self):
         from glados_hub import llm as llm_mod
@@ -1413,6 +1528,8 @@ class TestCameraAnnounceWiring(unittest.IsolatedAsyncioTestCase):
     nothing. The consumer task is driven by a pre-seeded queue — no broker."""
 
     def setUp(self):
+        self._quiet_off = quiet_hours_off()
+        self._quiet_off.start()
         self.mon = cameras.CameraMonitor(
             "127.0.0.1", 1883, "u", "p",
             {"front": "65", "back": "62"}, announce_enabled=("front",))
@@ -1423,6 +1540,9 @@ class TestCameraAnnounceWiring(unittest.IsolatedAsyncioTestCase):
             return "announced to: livingroom"
 
         self.mon.announce_fn = fake_announce
+
+    def tearDown(self):
+        self._quiet_off.stop()
 
     def det(self, cls, moving):
         return {"className": cls, "movement": ({"moving": moving} if moving else {})}

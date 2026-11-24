@@ -58,8 +58,25 @@ async def run_fake_spoke():
     return tts_bytes, statuses
 
 
+def _hub_responses_quiet():
+    """True when the live hub's quiet-hours config suppresses responses RIGHT
+    NOW (same file + clock + timezone the hub enforces with). The hub answers
+    nothing during quiet hours, so this test would fail by design — skip it.
+    """
+    try:
+        sys.path.insert(0, str(REPO / "docker" / "hub"))
+        from glados_hub import quiet  # noqa: E402
+        quiet.reload()  # fresh read; mirrors the hub's live enforcement
+        return quiet.is_active("responses")
+    except Exception:
+        return False  # let the test run and fail normally if this breaks
+
+
 class TestE2EPipeline(unittest.TestCase):
     @unittest.skipIf(not HUB_URL, "HUB_URL not set")
+    @unittest.skipIf(_hub_responses_quiet(),
+                     "hub is in quiet hours — responses are suppressed, "
+                     "no TTS would be produced (by design)")
     def test_full_loop_produces_streamed_tts(self):
         tts_bytes, statuses = asyncio.run(run_fake_spoke())
         print("\n[E2E] statuses:", statuses)
