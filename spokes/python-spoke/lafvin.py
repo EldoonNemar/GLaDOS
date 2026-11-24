@@ -13,7 +13,7 @@ is selected from the device-tree model at import time (see
 `detect_board` / `BoardProfile`):
 
   Raspberry Pi (BCM)        Orange Pi Zero 2W (H618)
-  board pin 13  DC   27        board pin 13  DC   259 (PI3)
+  board pin 13  DC   27        board pin 13  DC   227 (PH3)
   board pin  7  RST   4        board pin  7  RST  269 (PI13)
   board pin 15  BL   22        board pin 15  BL   261 (PI5)
   board pin 22  R    25        board pin 22  R    262 (PI6)
@@ -89,7 +89,7 @@ _ORANGE_PI_ZERO_2W = BoardProfile(
     # H618 SPI1: conservative default; the wiki loopback test runs at
     # 500 kHz and the panel was validated at 100 MHz on RPi SPI0.
     spi_speed_hz=50_000_000,
-    lcd_dc=259,      # PI3
+    lcd_dc=227,      # PH3 (board 13 = UART5_RX pad, unclaimed -> GPIO)
     lcd_rst=269,     # PI13
     backlight=261,   # PI5
     rgb_r=262,       # PI6

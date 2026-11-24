@@ -596,7 +596,7 @@ class TestBoardDetection(unittest.TestCase):
         self.assertEqual(b.spi_speed_hz, 50_000_000)
         # H618 SoC line offsets for the HAT header pins (verified against
         # the official Zero 2W wiki 40-pin table).
-        self.assertEqual(b.lcd_dc, 259)      # board 13, PI3
+        self.assertEqual(b.lcd_dc, 227)      # board 13, PH3
         self.assertEqual(b.lcd_rst, 269)     # board 7, PI13
         self.assertEqual(b.backlight, 261)   # board 15, PI5
         self.assertEqual(b.rgb_r, 262)       # board 22, PI6
@@ -746,7 +746,7 @@ class TestOpenOnOrangePiZero2W(unittest.TestCase):
             self.assertEqual(opened, {"bus": 1, "cs": 0})
             self.assertEqual(hat._spi._dev.max_speed_hz, 50_000_000)
             self.assertEqual(set(gpio.outputs),
-                             {259, 269, 261, 262, 228, 270})
+                             {227, 269, 261, 262, 228, 270})
             self.assertEqual(set(gpio.inputs), {226})
         finally:
             hat.close()
@@ -762,7 +762,7 @@ class TestOpenOnOrangePiZero2W(unittest.TestCase):
         try:
             self.assertEqual(opened["bus"], 1)
             self.assertEqual(set(gpio.outputs),
-                             {259, 269, 261, 262, 228, 270})
+                             {227, 269, 261, 262, 228, 270})
             self.assertEqual(set(gpio.inputs), {226})
         finally:
             hat.close()
